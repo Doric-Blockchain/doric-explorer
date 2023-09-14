@@ -1,0 +1,14 @@
+[
+  {
+    "title": "Doric Mainnet",
+    "url": "https://explorer.doric.network/",
+    "group": "Mainnets",
+    "icon": "https://raw.githubusercontent.com/blockscout/frontend-configs/main/configs/network-icons/ethereum.svg"
+  },
+  {
+    "title": "Doric Testnet",
+    "url": "https://testnet-explorer.doric.network/",
+    "group": "Other",
+    "icon": "https://raw.githubusercontent.com/blockscout/frontend-configs/main/configs/network-icons/poa-sokol.svg"
+  }
+]
