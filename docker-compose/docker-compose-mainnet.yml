@@ -38,7 +38,7 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     env_file:
-      - ./envs/common-blockscout.env
+      - ./envs/mainnet/common-blockscout.env
     environment:
       ETHEREUM_JSONRPC_VARIANT: 'geth'
       ETHEREUM_JSONRPC_HTTP_URL: http://54.226.187.184:8545
@@ -76,7 +76,7 @@ services:
     depends_on:
       - backend
     extends:
-      file: ./services/docker-compose-frontend.yml
+      file: ./services/mainnet/docker-compose-frontend.yml
       service: frontend
 
   stats-db:
