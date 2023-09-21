@@ -81,8 +81,8 @@ server {
         proxy_cache_bypass    $http_upgrade;
     }
 
-    ssl_certificate /etc/letsencrypt/live/explorer.doric.network/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/explorer.doric.network/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/testnet-explorer.doric.network/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/testnet-explorer.doric.network/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 }
