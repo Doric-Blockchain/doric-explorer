@@ -2,7 +2,8 @@ version: '3.8'
 
 services:
   frontend:
-    image: ghcr.io/doric-blockchain/doric-explorer-frontend:latest
+    build: .
+    image: doric-explorer:latest
     pull_policy: always
     platform: linux/amd64
     restart: always
