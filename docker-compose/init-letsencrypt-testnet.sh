@@ -71,4 +71,4 @@ docker compose -f "$compose_file" run --rm --entrypoint "\
 echo
 
 echo "### Reloading nginx ..."
-docker compose exec "$nginx_container_name $nginx_container_name" -s reload
+docker compose -f "$compose_file" restart "$nginx_container_name"
