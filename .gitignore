@@ -54,6 +54,7 @@ dump.rdb
 /docker-compose/services/logs
 /docker-compose/tmp
 # custom
+/docker-compose/data
 /docker-compose/services/data
 /docker-compose/services/**/logs
 
