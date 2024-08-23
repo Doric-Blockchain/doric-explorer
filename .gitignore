@@ -53,6 +53,8 @@ dump.rdb
 /docker-compose/services/redis-data
 /docker-compose/services/logs
 /docker-compose/tmp
+# custom
+/docker-compose/services/data
 /docker-compose/services/**/logs
 
 .idea/
