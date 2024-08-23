@@ -7,12 +7,13 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - "../proxy:/etc/nginx/templates"
-      - ./data/certbot/conf:/etc/letsencrypt
-      - ./data/certbot/www:/var/www/certbot
+      - "../../proxy:/etc/nginx/templates"
+      - ../data/certbot/conf:/etc/letsencrypt
+      - ../data/certbot/www:/var/www/certbot
     environment:
       BACK_PROXY_PASS: ${BACK_PROXY_PASS:-http://backend:4000}
       FRONT_PROXY_PASS: ${FRONT_PROXY_PASS:-http://frontend:3000}
+      DOMAIN_NAME: ${DOMAIN_NAME:-testnet-explorer.doric.network}
     ports:
       - 80:80
       - 8080:8080
