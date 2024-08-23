@@ -76,3 +76,11 @@ services:
     extends:
       file: ./services/docker-compose-nginx.yml
       service: proxy
+    command: '/bin/sh -c ''while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g "daemon off;"'''
+
+  certbot:
+    depends_on:
+      - proxy
+    extends:
+      file: ./services/docker-compose-certbot.yml
+      service: certbot
