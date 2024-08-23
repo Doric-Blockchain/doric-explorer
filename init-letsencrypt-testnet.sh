@@ -41,7 +41,7 @@ echo
 
 
 echo "### Starting nginx ..."
-docker compose up -f "$compose_file" --force-recreate -d "$nginx_container_name"
+docker compose -f "$compose_file" up --force-recreate -d "$nginx_container_name"
 echo
 
 echo "### Deleting dummy certificate for $domains ..."
