@@ -31,7 +31,9 @@ server {
         proxy_set_header      Connection $connection_upgrade;
         proxy_cache_bypass    $http_upgrade;
     }
-    location /.well-known/acme-challenge/ {
+    # for LetsEncrypt
+    location ~ /.well-known {
+        allow all;
         root /var/www/certbot;
     }
 }
