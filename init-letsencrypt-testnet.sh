@@ -45,7 +45,7 @@ docker compose up -f "$compose_file" --force-recreate -d "$nginx_container_name"
 echo
 
 echo "### Deleting dummy certificate for $domains ..."
-docker compose run -f "$compose_file" --rm --entrypoint "\
+docker compose run --rm --entrypoint "\
   rm -Rf /etc/letsencrypt/live/$domains && \
   rm -Rf /etc/letsencrypt/archive/$domains && \
   rm -Rf /etc/letsencrypt/renewal/$domains.conf" certbot
@@ -68,7 +68,7 @@ esac
 # Enable staging mode if needed
 if [ $staging != "0" ]; then staging_arg="--staging"; fi
 
-docker compose -f "$compose_file" run --rm --entrypoint "\
+docker compose run --rm --entrypoint "\
   certbot certonly --webroot -w /var/www/certbot \
     $staging_arg \
     $email_arg \
