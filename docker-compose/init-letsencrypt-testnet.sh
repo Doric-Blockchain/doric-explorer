@@ -7,9 +7,9 @@ fi
 
 domain="testnet-explorer.doric.network"
 nginx_container_name="proxy"
-compose_file="./docker-compose/docker-compose-testnet.yml"
+compose_file="./docker-compose-doric-testnet.yml"
 rsa_key_size=4096
-data_path="./docker-compose/services/data/certbot"
+data_path="./services/data/certbot"
 email="dev@doric.network" # Adding a valid address is strongly recommended
 staging=0 # Set to 1 if you're testing your setup to avoid hitting request limits
 domain_args="-d $domain"
