@@ -66,3 +66,5 @@ dump.rdb
 *.env.example
 *.env.local
 *.env.staging
+
+/data
