@@ -30,6 +30,11 @@ services:
       - db:database
     environment:
       ETHEREUM_JSONRPC_VARIANT: "geth"
+    logging: # custom log max size and files
+      driver: "json-file"
+      options:
+        max-size: "1k"
+        max-file: "3"
   visualizer:
     extends:
       file: ./services/visualizer.yml
