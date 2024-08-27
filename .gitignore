@@ -54,7 +54,7 @@ dump.rdb
 /docker-compose/services/logs
 /docker-compose/tmp
 # custom
-/docker-compose/certbot-data
+/docker-compose/services/certbot-data
 /docker-compose/services/**/**/logs
 
 .idea/
