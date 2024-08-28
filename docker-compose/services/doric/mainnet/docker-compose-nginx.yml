@@ -5,7 +5,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - "../../../proxy/doric:/etc/nginx/templates"
+      - ../../../proxy/doric/templates:/etc/nginx/templates
+      - ../../../proxy/doric/conf:/etc/letsencrypt
       - ../../certbot-data/certbot/conf:/etc/letsencrypt
       - ../../certbot-data/certbot/www:/var/www/certbot
     environment:
