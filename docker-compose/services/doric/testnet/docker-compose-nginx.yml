@@ -7,8 +7,8 @@ services:
     volumes:
       - ../../../proxy/doric/templates:/etc/nginx/templates
       - ../../../proxy/doric/conf:/etc/letsencrypt
-      - ../../certbot-data/certbot/conf:/etc/letsencrypt
-      - ../../certbot-data/certbot/www:/var/www/certbot
+      - ../../certbot-data/conf:/etc/letsencrypt
+      - ../../certbot-data/www:/var/www/certbot
     environment:
       BACK_PROXY_PASS: ${BACK_PROXY_PASS:-http://backend:4000}
       FRONT_PROXY_PASS: ${FRONT_PROXY_PASS:-http://frontend:3000}
