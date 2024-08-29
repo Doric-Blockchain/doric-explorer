@@ -62,7 +62,6 @@ services:
     depends_on:
       - backend
       - frontend
-      - stats
     extends:
       file: ./services/doric/testnet/docker-compose-nginx.yml # custom for doric testnet
       service: proxy
