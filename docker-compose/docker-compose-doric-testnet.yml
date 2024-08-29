@@ -58,27 +58,6 @@ services:
       file: ./services/doric/testnet/docker-compose-frontend.yml # custom for doric testnet
       service: frontend
 
-  stats-db-init:
-    extends:
-      file: ./services/stats.yml
-      service: stats-db-init
-
-  stats-db:
-    depends_on:
-      stats-db-init:
-        condition: service_completed_successfully
-    extends:
-      file: ./services/stats.yml
-      service: stats-db
-
-  stats:
-    depends_on:
-      - stats-db
-      - backend
-    extends:
-      file: ./services/stats.yml
-      service: stats
-
   proxy:
     depends_on:
       - backend
