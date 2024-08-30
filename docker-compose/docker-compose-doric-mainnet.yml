@@ -1,0 +1,74 @@
+services:
+  redis-db:
+    extends:
+      file: ./services/redis.yml
+      service: redis-db
+
+  db-init:
+    extends:
+      file: ./services/db.yml
+      service: db-init
+
+  db:
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    extends:
+      file: ./services/db.yml
+      service: db
+
+  backend:
+    depends_on:
+      - db
+      - redis-db
+    extends:
+      file: ./services/doric/mainnet/docker-compose-backend.yml # custom for doric mainnet
+      service: backend
+    links:
+      - db:database
+    environment:
+      ETHEREUM_JSONRPC_VARIANT: "geth"
+    logging: # custom log max size and files
+      driver: "json-file"
+      options:
+        max-size: "1k"
+        max-file: "3"
+
+  visualizer:
+    extends:
+      file: ./services/visualizer.yml
+      service: visualizer
+
+  sig-provider:
+    extends:
+      file: ./services/sig-provider.yml
+      service: sig-provider
+
+  sc-verifier:
+    extends:
+      file: ./services/smart-contract-verifier.yml
+      service: smart-contract-verifier
+    ports:
+      - 8082:8050
+
+  frontend:
+    depends_on:
+      - backend
+    extends:
+      file: ./services/doric/mainnet/docker-compose-frontend.yml # custom for doric mainnet
+      service: frontend
+
+  proxy:
+    depends_on:
+      - backend
+      - frontend
+    extends:
+      file: ./services/doric/mainnet/docker-compose-nginx.yml # custom for doric mainnet
+      service: proxy
+
+  certbot:
+    depends_on:
+      - proxy
+    extends:
+      file: ./services/certbot.yml
+      service: certbot

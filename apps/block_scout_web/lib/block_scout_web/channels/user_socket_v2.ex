@@ -7,9 +7,12 @@ defmodule BlockScoutWeb.UserSocketV2 do
   channel("addresses:*", BlockScoutWeb.AddressChannel)
   channel("blocks:*", BlockScoutWeb.BlockChannel)
   channel("exchange_rate:*", BlockScoutWeb.ExchangeRateChannel)
+  channel("optimism_deposits:*", BlockScoutWeb.OptimismDepositChannel)
   channel("rewards:*", BlockScoutWeb.RewardChannel)
   channel("transactions:*", BlockScoutWeb.TransactionChannel)
   channel("tokens:*", BlockScoutWeb.TokenChannel)
+  channel("token_instances:*", BlockScoutWeb.TokenInstanceChannel)
+  channel("zkevm_batches:*", BlockScoutWeb.PolygonZkevmConfirmedBatchChannel)
 
   def connect(_params, socket) do
     {:ok, socket}

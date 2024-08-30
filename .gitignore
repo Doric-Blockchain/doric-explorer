@@ -51,8 +51,11 @@ dump.rdb
 /docker-compose/services/blockscout-db-data
 /docker-compose/services/stats-db-data
 /docker-compose/services/redis-data
+/docker-compose/services/logs
 /docker-compose/tmp
-/docker-compose/logs
+# custom
+/docker-compose/services/certbot-data
+/docker-compose/services/**/**/logs
 
 .idea/
 *.iml
@@ -60,3 +63,8 @@ dump.rdb
 .vscode
 
 **.dec**
+
+.env
+*.env.example
+*.env.local
+*.env.staging
