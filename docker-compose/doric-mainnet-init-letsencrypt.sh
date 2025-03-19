@@ -31,26 +31,10 @@ if [ ! -e "$data_path/conf/options-ssl-nginx.conf" ] || [ ! -e "$data_path/conf/
   echo
 fi
 
-echo "### Creating dummy certificate for $domain ..."
-path="/etc/letsencrypt/live/$domain"
-mkdir -p "$data_path/conf/live/$domain"
-docker compose -f "$compose_file" run --rm --entrypoint "\
-  openssl req -x509 -nodes -newkey rsa:$rsa_key_size -days 1\
-    -keyout '$path/privkey.pem' \
-    -out '$path/fullchain.pem' \
-    -subj '/CN=localhost'" certbot
-echo
 
 
 echo "### Starting nginx ..."
 docker compose -f "$compose_file" up --force-recreate -d "$nginx_container_name"
-echo
-
-echo "### Deleting dummy certificate for $domain ..."
-docker compose -f "$compose_file" run --rm --entrypoint "\
-  rm -Rf /etc/letsencrypt/live/$domain && \
-  rm -Rf /etc/letsencrypt/archive/$domain && \
-  rm -Rf /etc/letsencrypt/renewal/$domain.conf" certbot
 echo
 
 
