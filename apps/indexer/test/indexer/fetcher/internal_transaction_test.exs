@@ -2,21 +2,33 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
   use EthereumJSONRPC.Case, async: false
   use Explorer.DataCase
 
+  use Utils.CompileTimeEnvHelper,
+    chain_identity: [:explorer, :chain_identity]
+
   import ExUnit.CaptureLog
   import Mox
 
   alias Ecto.Multi
   alias Explorer.{Chain, Repo}
-  alias Explorer.Chain.{Block, PendingBlockOperation}
+  alias Explorer.Chain.{Block, PendingBlockOperation, PendingTransactionOperation}
   alias Explorer.Chain.Import.Runner.Blocks
   alias Indexer.Fetcher.CoinBalance.Catchup, as: CoinBalanceCatchup
   alias Indexer.Fetcher.{InternalTransaction, PendingTransaction}
+  alias Indexer.Fetcher.TokenBalance.Current, as: TokenBalanceCurrent
+  alias Indexer.Fetcher.TokenBalance.Historical, as: TokenBalanceHistorical
 
   # MUST use global mode because we aren't guaranteed to get PendingTransactionFetcher's pid back fast enough to `allow`
   # it to use expectations and stubs from test's pid.
   setup :set_mox_global
 
   setup :verify_on_exit!
+
+  setup do
+    config = Application.get_env(:ethereum_jsonrpc, EthereumJSONRPC.Geth)
+    Application.put_env(:ethereum_jsonrpc, EthereumJSONRPC.Geth, Keyword.put(config, :block_traceable?, true))
+
+    on_exit(fn -> Application.put_env(:ethereum_jsonrpc, EthereumJSONRPC.Geth, config) end)
+  end
 
   @moduletag [capture_log: true, no_geth: true]
 
@@ -68,10 +80,14 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
 
     CoinBalanceCatchup.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
     PendingTransaction.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+    start_token_balance_fetcher(json_rpc_named_arguments)
 
-    wait_for_results(fn ->
-      Repo.one!(from(transaction in Explorer.Chain.Transaction, where: is_nil(transaction.block_hash), limit: 1))
-    end)
+    wait_for_results(
+      fn ->
+        Repo.one!(from(transaction in Explorer.Chain.Transaction, where: is_nil(transaction.block_hash), limit: 1))
+      end,
+      60
+    )
 
     hash_strings =
       InternalTransaction.init([], fn hash_string, acc -> [hash_string | acc] end, json_rpc_named_arguments)
@@ -105,6 +121,8 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
     block_number = 1_000_006
     block = insert(:block, number: block_number)
     insert(:pending_block_operation, block_hash: block.hash, block_number: block.number)
+
+    start_token_balance_fetcher(json_rpc_named_arguments)
 
     assert :ok = InternalTransaction.run([block_number], json_rpc_named_arguments)
 
@@ -174,6 +192,8 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
       block_hash = block.hash
       insert(:pending_block_operation, block_hash: block_hash, block_number: block.number)
 
+      start_token_balance_fetcher(json_rpc_named_arguments)
+
       assert %{block_hash: block_hash} = Repo.get(PendingBlockOperation, block_hash)
 
       assert :ok == InternalTransaction.run([block.number], json_rpc_named_arguments)
@@ -187,7 +207,8 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
       block = insert(:block)
       transaction = insert(:transaction) |> with_block(block)
       block_hash = block.hash
-      insert(:pending_block_operation, block_hash: block_hash, block_number: block.number)
+      block_number = block.number
+      insert(:pending_block_operation, block_hash: block_hash, block_number: block_number)
 
       if json_rpc_named_arguments[:transport] == EthereumJSONRPC.Mox do
         case Keyword.fetch!(json_rpc_named_arguments, :variant) do
@@ -278,6 +299,7 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
       end
 
       CoinBalanceCatchup.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+      start_token_balance_fetcher(json_rpc_named_arguments)
 
       assert %{block_hash: block_hash} = Repo.get(PendingBlockOperation, block_hash)
 
@@ -285,7 +307,7 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
 
       assert nil == Repo.get(PendingBlockOperation, block_hash)
 
-      assert Repo.exists?(from(i in Chain.InternalTransaction, where: i.block_hash == ^block_hash))
+      assert Repo.exists?(from(i in Chain.InternalTransaction, where: i.block_number == ^block_number))
     end
 
     test "handles failure by retrying only unique numbers", %{
@@ -307,166 +329,6 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
       assert {:retry, [block.number]} == InternalTransaction.run([block.number, block.number], json_rpc_named_arguments)
 
       assert %{block_hash: ^block_hash} = Repo.get(PendingBlockOperation, block_hash)
-    end
-
-    test "set block refetch_needed=true on foreign_key_violation", %{
-      json_rpc_named_arguments: json_rpc_named_arguments
-    } do
-      block = insert(:block)
-      transaction = :transaction |> insert() |> with_block(block)
-      block_number = block.number
-      insert(:pending_block_operation, block_hash: block.hash, block_number: block.number)
-
-      if json_rpc_named_arguments[:transport] == EthereumJSONRPC.Mox do
-        case Keyword.fetch!(json_rpc_named_arguments, :variant) do
-          EthereumJSONRPC.Nethermind ->
-            EthereumJSONRPC.Mox
-            |> expect(:json_rpc, fn [%{id: id, method: "trace_replayBlockTransactions"}], _options ->
-              {:ok,
-               [
-                 %{
-                   id: id,
-                   result: [
-                     %{
-                       "output" => "0x",
-                       "stateDiff" => nil,
-                       "trace" => [
-                         %{
-                           "action" => %{
-                             "callType" => "call",
-                             "from" => "0xa931c862e662134b85e4dc4baf5c70cc9ba74db4",
-                             "gas" => "0x8600",
-                             "input" => "0xb118e2db0000000000000000000000000000000000000000000000000000000000000008",
-                             "to" => "0x1469b17ebf82fedf56f04109e5207bdc4554288c",
-                             "value" => "0x174876e800"
-                           },
-                           "result" => %{"gasUsed" => "0x7d37", "output" => "0x"},
-                           "subtraces" => 1,
-                           "traceAddress" => [],
-                           "type" => "call"
-                         },
-                         %{
-                           "action" => %{
-                             "callType" => "call",
-                             "from" => "0xb37b428a7ddee91f39b26d79d23dc1c89e3e12a7",
-                             "gas" => "0x32dcf",
-                             "input" => "0x42dad49e",
-                             "to" => "0xee4019030fb5c2b68c42105552c6268d56c6cbfe",
-                             "value" => "0x0"
-                           },
-                           "result" => %{
-                             "gasUsed" => "0xb08",
-                             "output" => "0x"
-                           },
-                           "subtraces" => 0,
-                           "traceAddress" => [0],
-                           "type" => "call"
-                         }
-                       ],
-                       "transactionHash" => transaction.hash,
-                       "vmTrace" => nil
-                     },
-                     %{
-                       "output" => "0x",
-                       "stateDiff" => nil,
-                       "trace" => [
-                         %{
-                           "action" => %{
-                             "callType" => "call",
-                             "from" => "0xa931c862e662134b85e4dc4baf5c70cc9ba74db4",
-                             "gas" => "0x8600",
-                             "input" => "0xb118e2db0000000000000000000000000000000000000000000000000000000000000008",
-                             "to" => "0x1469b17ebf82fedf56f04109e5207bdc4554288c",
-                             "value" => "0x174876e800"
-                           },
-                           "result" => %{"gasUsed" => "0x7d37", "output" => "0x"},
-                           "subtraces" => 1,
-                           "traceAddress" => [],
-                           "type" => "call"
-                         },
-                         %{
-                           "action" => %{
-                             "callType" => "call",
-                             "from" => "0xb37b428a7ddee91f39b26d79d23dc1c89e3e12a7",
-                             "gas" => "0x32dcf",
-                             "input" => "0x42dad49e",
-                             "to" => "0xee4019030fb5c2b68c42105552c6268d56c6cbfe",
-                             "value" => "0x0"
-                           },
-                           "result" => %{
-                             "gasUsed" => "0xb08",
-                             "output" => "0x"
-                           },
-                           "subtraces" => 0,
-                           "traceAddress" => [0],
-                           "type" => "call"
-                         }
-                       ],
-                       "transactionHash" => transaction_hash(),
-                       "vmTrace" => nil
-                     }
-                   ]
-                 }
-               ]}
-            end)
-
-          EthereumJSONRPC.Geth ->
-            EthereumJSONRPC.Mox
-            |> expect(:json_rpc, fn [%{id: id, method: "debug_traceTransaction"}], _options ->
-              {:ok,
-               [
-                 %{
-                   id: id,
-                   result: [
-                     %{
-                       "blockNumber" => block.number,
-                       "transactionIndex" => 0,
-                       "transactionHash" => transaction.hash,
-                       "index" => 0,
-                       "traceAddress" => [],
-                       "type" => "call",
-                       "callType" => "call",
-                       "from" => "0xa931c862e662134b85e4dc4baf5c70cc9ba74db4",
-                       "to" => "0x1469b17ebf82fedf56f04109e5207bdc4554288c",
-                       "gas" => "0x8600",
-                       "gasUsed" => "0x7d37",
-                       "input" => "0xb118e2db0000000000000000000000000000000000000000000000000000000000000008",
-                       "output" => "0x",
-                       "value" => "0x174876e800"
-                     },
-                     %{
-                       "blockNumber" => block.number,
-                       "transactionIndex" => 0,
-                       "transactionHash" => transaction_hash(),
-                       "index" => 0,
-                       "traceAddress" => [],
-                       "type" => "call",
-                       "callType" => "call",
-                       "from" => "0xa931c862e662134b85e4dc4baf5c70cc9ba74db4",
-                       "to" => "0x1469b17ebf82fedf56f04109e5207bdc4554288c",
-                       "gas" => "0x8600",
-                       "gasUsed" => "0x7d37",
-                       "input" => "0xb118e2db0000000000000000000000000000000000000000000000000000000000000008",
-                       "output" => "0x",
-                       "value" => "0x174876e800"
-                     }
-                   ]
-                 }
-               ]}
-            end)
-
-          variant_name ->
-            raise ArgumentError, "Unsupported variant name (#{variant_name})"
-        end
-      end
-
-      logs =
-        capture_log(fn ->
-          assert {:retry, [^block_number]} = InternalTransaction.run([block_number], json_rpc_named_arguments)
-        end)
-
-      assert %{consensus: true, refetch_needed: true} = Repo.reload(block)
-      assert logs =~ "foreign_key_violation on internal transactions import, foreign transactions hashes:"
     end
   end
 
@@ -509,6 +371,9 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
     test "fetches internal transactions from Arbitrum", %{
       json_rpc_named_arguments: json_rpc_named_arguments
     } do
+      config = Application.get_env(:ethereum_jsonrpc, EthereumJSONRPC.Geth)
+      Application.put_env(:ethereum_jsonrpc, EthereumJSONRPC.Geth, Keyword.put(config, :block_traceable?, false))
+
       json_rpc_named_arguments =
         json_rpc_named_arguments
         |> Enum.reject(fn {key, _value} -> key == :variant || key == :transport_options end)
@@ -516,10 +381,9 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
         |> Enum.concat([{:transport_options, [http_options: []]}])
 
       block = insert(:block, number: 1)
-      _transaction = :transaction |> insert() |> with_block(block)
+      transaction = :transaction |> insert() |> with_block(block)
       block_number = block.number
-      block_hash = block.hash
-      insert(:pending_block_operation, block_hash: block_hash, block_number: block_number)
+      insert(:pending_transaction_operation, transaction_hash: transaction.hash)
 
       EthereumJSONRPC.Mox
       |> expect(:json_rpc, fn [%{id: id, method: "debug_traceTransaction"}], _options ->
@@ -592,20 +456,36 @@ defmodule Indexer.Fetcher.InternalTransactionTest do
 
       CoinBalanceCatchup.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
 
-      assert %{block_hash: block_hash} = Repo.get(PendingBlockOperation, block_hash)
+      assert %{} = Repo.get(PendingTransactionOperation, transaction.hash)
 
-      assert :ok == InternalTransaction.run([block_number], json_rpc_named_arguments)
+      assert :ok ==
+               InternalTransaction.run(
+                 [%{block_number: transaction.block_number, hash: transaction.hash, index: transaction.index}],
+                 json_rpc_named_arguments
+               )
 
-      assert nil == Repo.get(PendingBlockOperation, block_hash)
+      assert nil == Repo.get(PendingTransactionOperation, transaction.hash)
 
-      int_txs = Repo.all(from(i in Chain.InternalTransaction, where: i.block_hash == ^block_hash))
+      internal_transactions = Repo.all(from(i in Chain.InternalTransaction, where: i.block_number == ^block_number))
 
-      assert Enum.count(int_txs) > 0
+      assert Enum.count(internal_transactions) > 0
 
-      last_int_tx = List.last(int_txs)
+      last_internal_transaction = List.last(internal_transactions)
 
-      assert last_int_tx.type == :call
-      assert last_int_tx.call_type == :invalid
+      assert last_internal_transaction.type == :call
+      assert last_internal_transaction.call_type_enum == :invalid
     end
+  end
+
+  # Due to token-duality feature in Celo network (native coin transfers are
+  # treated as token transfers), we need to fetch updated token balances after
+  # parsing the internal transactions
+  if @chain_identity == {:optimism, :celo} do
+    defp start_token_balance_fetcher(json_rpc_named_arguments) do
+      TokenBalanceHistorical.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+      TokenBalanceCurrent.Supervisor.Case.start_supervised!(json_rpc_named_arguments: json_rpc_named_arguments)
+    end
+  else
+    defp start_token_balance_fetcher(_json_rpc_named_arguments), do: :ok
   end
 end

@@ -359,11 +359,12 @@ defmodule EthereumJSONRPC.GethTest do
 
       Application.put_env(:ethereum_jsonrpc, Geth, tracer: "call_tracer", debug_trace_timeout: "5s")
 
-      call_tracer_internal_txs = Geth.fetch_internal_transactions([transaction_params], json_rpc_named_arguments)
+      call_tracer_internal_transactions =
+        Geth.fetch_internal_transactions([transaction_params], json_rpc_named_arguments)
 
       Application.put_env(:ethereum_jsonrpc, Geth, tracer: "js", debug_trace_timeout: "5s")
 
-      assert call_tracer_internal_txs ==
+      assert call_tracer_internal_transactions ==
                Geth.fetch_internal_transactions([transaction_params], json_rpc_named_arguments)
     end
 
@@ -431,11 +432,12 @@ defmodule EthereumJSONRPC.GethTest do
 
       Application.put_env(:ethereum_jsonrpc, Geth, tracer: "call_tracer", debug_trace_timeout: "5s")
 
-      call_tracer_internal_txs = Geth.fetch_internal_transactions([transaction_params], json_rpc_named_arguments)
+      call_tracer_internal_transactions =
+        Geth.fetch_internal_transactions([transaction_params], json_rpc_named_arguments)
 
       Application.put_env(:ethereum_jsonrpc, Geth, tracer: "js", debug_trace_timeout: "5s")
 
-      assert call_tracer_internal_txs ==
+      assert call_tracer_internal_transactions ==
                Geth.fetch_internal_transactions([transaction_params], json_rpc_named_arguments)
     end
 
@@ -482,7 +484,7 @@ defmodule EthereumJSONRPC.GethTest do
                   transaction_hash: "0xb342cafc6ac552c3be2090561453204c8784caf025ac8267320834e4cd163d96",
                   transaction_index: 13,
                   type: "stop",
-                  value: 0
+                  value: nil
                 }
               ]} = Geth.fetch_internal_transactions([transaction_params], json_rpc_named_arguments)
     end
@@ -620,7 +622,7 @@ defmodule EthereumJSONRPC.GethTest do
                   transaction_hash: ^transaction_hash,
                   transaction_index: 0,
                   type: "call",
-                  value: 0
+                  value: nil
                 },
                 %{
                   block_number: 3_287_375,
@@ -637,7 +639,7 @@ defmodule EthereumJSONRPC.GethTest do
                   transaction_hash: ^transaction_hash,
                   transaction_index: 0,
                   type: "call",
-                  value: 0
+                  value: nil
                 }
               ]} = Geth.fetch_block_internal_transactions([block_number], json_rpc_named_arguments)
     end
@@ -740,7 +742,7 @@ defmodule EthereumJSONRPC.GethTest do
                   transaction_hash: ^transaction_hash_1,
                   transaction_index: 0,
                   type: "call",
-                  value: 0
+                  value: nil
                 },
                 %{
                   block_number: ^block_number_1,
@@ -757,7 +759,7 @@ defmodule EthereumJSONRPC.GethTest do
                   transaction_hash: ^transaction_hash_1,
                   transaction_index: 0,
                   type: "call",
-                  value: 0
+                  value: nil
                 },
                 %{
                   block_number: ^block_number_2,
@@ -774,7 +776,7 @@ defmodule EthereumJSONRPC.GethTest do
                   transaction_hash: ^transaction_hash_2,
                   transaction_index: 0,
                   type: "call",
-                  value: 0
+                  value: nil
                 },
                 %{
                   block_number: ^block_number_2,
@@ -791,7 +793,7 @@ defmodule EthereumJSONRPC.GethTest do
                   transaction_hash: ^transaction_hash_2,
                   transaction_index: 0,
                   type: "call",
-                  value: 0
+                  value: nil
                 }
               ]} = Geth.fetch_block_internal_transactions([block_number_1, block_number_2], json_rpc_named_arguments)
     end

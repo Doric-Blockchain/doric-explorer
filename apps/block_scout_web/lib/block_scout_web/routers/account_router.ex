@@ -4,7 +4,14 @@ defmodule BlockScoutWeb.Routers.AccountRouter do
   """
   use BlockScoutWeb, :router
 
-  alias BlockScoutWeb.Account.Api.V2.{AuthenticateController, EmailController, TagsController, UserController}
+  alias BlockScoutWeb.Account.API.V2.{
+    AddressController,
+    AuthenticateController,
+    EmailController,
+    TagsController,
+    UserController
+  }
+
   alias BlockScoutWeb.Plug.{CheckAccountAPI, CheckAccountWeb}
 
   @max_query_string_length 5_000
@@ -29,7 +36,7 @@ defmodule BlockScoutWeb.Routers.AccountRouter do
     plug(BlockScoutWeb.ChecksumAddress)
   end
 
-  pipeline :account_api do
+  pipeline :account_api_v2 do
     plug(
       Plug.Parsers,
       parsers: [:urlencoded, :multipart, :json],
@@ -39,14 +46,17 @@ defmodule BlockScoutWeb.Routers.AccountRouter do
       json_decoder: Poison
     )
 
-    plug(BlockScoutWeb.Plug.Logger, application: :api)
+    plug(BlockScoutWeb.Plug.Logger, application: :api_v2)
     plug(:accepts, ["json"])
     plug(:fetch_session)
     plug(:protect_from_forgery)
     plug(CheckAccountAPI)
+    plug(OpenApiSpex.Plug.PutApiSpec, module: BlockScoutWeb.Specs.Private)
   end
 
-  pipeline :api do
+  pipeline :account_api_v2_no_protect_from_forgery do
+    plug(CheckAccountAPI)
+
     plug(
       Plug.Parsers,
       parsers: [:urlencoded, :multipart, :json],
@@ -56,8 +66,9 @@ defmodule BlockScoutWeb.Routers.AccountRouter do
       json_decoder: Poison
     )
 
-    plug(BlockScoutWeb.Plug.Logger, application: :api)
+    plug(BlockScoutWeb.Plug.Logger, application: :api_v2)
     plug(:accepts, ["json"])
+    plug(OpenApiSpex.Plug.PutApiSpec, module: BlockScoutWeb.Specs.Private)
   end
 
   scope "/auth", BlockScoutWeb do
@@ -102,23 +113,23 @@ defmodule BlockScoutWeb.Routers.AccountRouter do
       only: [:new, :create, :edit, :update, :delete, :index],
       as: :custom_abi
     )
-
-    resources("/public_tags_request", Account.PublicTagsRequestController,
-      only: [:new, :create, :edit, :update, :delete, :index],
-      as: :public_tags_request
-    )
   end
 
   scope "/v2", as: :account_v2 do
-    pipe_through(:account_api)
+    pipe_through(:account_api_v2)
 
     get("/authenticate", AuthenticateController, :authenticate_get)
     post("/authenticate", AuthenticateController, :authenticate_post)
 
     get("/get_csrf", UserController, :get_csrf)
 
+    scope "/address" do
+      post("/link", AddressController, :link_address)
+    end
+
     scope "/email" do
       get("/resend", EmailController, :resend_email)
+      post("/link", EmailController, :link_email)
     end
 
     scope "/user" do
@@ -139,11 +150,6 @@ defmodule BlockScoutWeb.Routers.AccountRouter do
       post("/custom_abis", UserController, :create_custom_abi)
       put("/custom_abis/:id", UserController, :update_custom_abi)
 
-      get("/public_tags", UserController, :public_tags_requests)
-      delete("/public_tags/:id", UserController, :delete_public_tags_request)
-      post("/public_tags", UserController, :create_public_tags_request)
-      put("/public_tags/:id", UserController, :update_public_tags_request)
-
       scope "/tags" do
         get("/address/", UserController, :tags_address)
         get("/address/:id", UserController, :tags_address)
@@ -161,13 +167,22 @@ defmodule BlockScoutWeb.Routers.AccountRouter do
   end
 
   scope "/v2" do
-    pipe_through(:api)
-    pipe_through(:account_api)
+    pipe_through(:account_api_v2)
 
     scope "/tags" do
       get("/address/:address_hash", TagsController, :tags_address)
 
       get("/transaction/:transaction_hash", TagsController, :tags_transaction)
     end
+  end
+
+  scope "/v2" do
+    pipe_through(:account_api_v2_no_protect_from_forgery)
+
+    post("/authenticate_via_wallet", AuthenticateController, :authenticate_via_wallet)
+    get("/authenticate_via_dynamic", AuthenticateController, :authenticate_via_dynamic)
+    post("/send_otp", AuthenticateController, :send_otp)
+    post("/confirm_otp", AuthenticateController, :confirm_otp)
+    get("/siwe_message", AuthenticateController, :siwe_message)
   end
 end

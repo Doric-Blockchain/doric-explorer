@@ -8,8 +8,7 @@ defmodule BlockScoutWeb.TransactionStateControllerTest do
   import EthereumJSONRPC, only: [integer_to_quantity: 1]
   alias Explorer.Chain.Wei
   alias Indexer.Fetcher.CoinBalance.Catchup, as: CoinBalanceCatchup
-  alias Explorer.Counters.{AddressesCounter, AverageBlockTime}
-  alias Indexer.Fetcher.OnDemand.CoinBalance, as: CoinBalanceOnDemand
+  alias Explorer.Chain.Cache.Counters.{AddressesCount, AverageBlockTime}
 
   setup :set_mox_global
 
@@ -23,12 +22,19 @@ defmodule BlockScoutWeb.TransactionStateControllerTest do
 
     start_supervised!({Task.Supervisor, name: Indexer.TaskSupervisor})
     start_supervised!(AverageBlockTime)
-    start_supervised!(AddressesCounter)
-    start_supervised!({CoinBalanceOnDemand, [mocked_json_rpc_named_arguments, [name: CoinBalanceOnDemand]]})
+    start_supervised!(AddressesCount)
+
+    configuration = Application.get_env(:indexer, Indexer.Fetcher.OnDemand.CoinBalance.Supervisor)
+    Application.put_env(:indexer, Indexer.Fetcher.OnDemand.CoinBalance.Supervisor, disabled?: false)
 
     Application.put_env(:explorer, AverageBlockTime, enabled: true, cache_period: 1_800_000)
 
+    Indexer.Fetcher.OnDemand.CoinBalance.Supervisor.Case.start_supervised!(
+      json_rpc_named_arguments: mocked_json_rpc_named_arguments
+    )
+
     on_exit(fn ->
+      Application.put_env(:indexer, Indexer.Fetcher.OnDemand.CoinBalance.Supervisor, configuration)
       Application.put_env(:explorer, AverageBlockTime, enabled: false, cache_period: 1_800_000)
     end)
   end
@@ -244,7 +250,7 @@ defmodule BlockScoutWeb.TransactionStateControllerTest do
       full_text = Enum.join(items)
 
       assert(length(items) == 3)
-      assert(String.contains?(full_text, format_wei_value(%Wei{value: Decimal.new(0)}, :ether)))
+      assert(String.contains?(full_text, format_wei_value(Wei.zero(), :ether)))
 
       1 |> :timer.seconds() |> :timer.sleep()
       conn = get(conn, transaction_state_path(conn, :index, transaction), %{type: "JSON"})

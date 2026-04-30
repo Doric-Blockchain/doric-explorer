@@ -13,12 +13,13 @@ defmodule BlockScoutWeb.AddressValidationController do
 
   alias BlockScoutWeb.{AccessHelper, BlockView, Controller}
   alias Explorer.{Chain, Market}
+  alias Explorer.Chain.Block
   alias Indexer.Fetcher.OnDemand.CoinBalance, as: CoinBalanceOnDemand
   alias Phoenix.View
 
   def index(conn, %{"address_id" => address_hash_string, "type" => "JSON"} = params) do
     with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
-         {:ok, _} <- Chain.find_or_insert_address_from_hash(address_hash, [], false),
+         {:ok, _} <- Chain.find_or_insert_address_from_hash(address_hash, []),
          {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params) do
       full_options =
         Keyword.merge(
@@ -33,7 +34,7 @@ defmodule BlockScoutWeb.AddressValidationController do
           paging_options(params)
         )
 
-      blocks_plus_one = Chain.get_blocks_validated_by_address(full_options, address_hash)
+      blocks_plus_one = Block.get_blocks_validated_by_address(full_options, address_hash)
       {blocks, next_page} = split_list_by_page(blocks_plus_one)
 
       next_page_path =
@@ -72,6 +73,8 @@ defmodule BlockScoutWeb.AddressValidationController do
   end
 
   def index(conn, %{"address_id" => address_hash_string} = params) do
+    ip = AccessHelper.conn_to_ip_string(conn)
+
     with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
          {:ok, address} <- Chain.find_or_insert_address_from_hash(address_hash),
          {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params) do
@@ -79,7 +82,7 @@ defmodule BlockScoutWeb.AddressValidationController do
         conn,
         "index.html",
         address: address,
-        coin_balance_status: CoinBalanceOnDemand.trigger_fetch(address),
+        coin_balance_status: CoinBalanceOnDemand.trigger_fetch(ip, address),
         current_path: Controller.current_full_path(conn),
         counters_path: address_path(conn, :address_counters, %{"id" => address_hash_string}),
         exchange_rate: Market.get_coin_exchange_rate(),
@@ -91,9 +94,6 @@ defmodule BlockScoutWeb.AddressValidationController do
 
       :error ->
         unprocessable_entity(conn)
-
-      {:error, :not_found} ->
-        not_found(conn)
     end
   end
 end

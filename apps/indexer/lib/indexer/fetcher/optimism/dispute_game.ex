@@ -16,7 +16,10 @@ defmodule Indexer.Fetcher.Optimism.DisputeGame do
   alias EthereumJSONRPC.Contract
   alias Explorer.Application.Constants
   alias Explorer.{Chain, Helper, Repo}
+  alias Explorer.Chain.Data
+  alias Explorer.Chain.Hash.Address
   alias Explorer.Chain.Optimism.{DisputeGame, Withdrawal}
+  alias Indexer.Fetcher.Optimism
   alias Indexer.Helper, as: IndexerHelper
 
   @fetcher_name :optimism_dispute_games
@@ -51,13 +54,17 @@ defmodule Indexer.Fetcher.Optimism.DisputeGame do
   def handle_continue(:ok, _state) do
     Logger.metadata(fetcher: @fetcher_name)
 
-    env = Application.get_all_env(:indexer)[Indexer.Fetcher.Optimism]
-    rpc = env[:optimism_l1_rpc]
-    optimism_portal = env[:optimism_l1_portal]
+    # two seconds pause needed to avoid exceeding Supervisor restart intensity when DB issues
+    :timer.sleep(2000)
 
-    with {:rpc_l1_undefined, false} <- {:rpc_l1_undefined, is_nil(rpc)},
-         {:optimism_portal_valid, true} <- {:optimism_portal_valid, IndexerHelper.address_correct?(optimism_portal)},
+    env = Application.get_all_env(:indexer)[Optimism]
+    system_config = env[:optimism_l1_system_config]
+    rpc = env[:optimism_l1_rpc]
+
+    with {:system_config_valid, true} <- {:system_config_valid, IndexerHelper.address_correct?(system_config)},
+         {:rpc_l1_undefined, false} <- {:rpc_l1_undefined, is_nil(rpc)},
          json_rpc_named_arguments = IndexerHelper.json_rpc_named_arguments(rpc),
+         {optimism_portal, _} <- Optimism.read_system_config(system_config, json_rpc_named_arguments),
          dispute_game_factory = get_dispute_game_factory_address(optimism_portal, json_rpc_named_arguments),
          {:dispute_game_factory_available, true} <- {:dispute_game_factory_available, !is_nil(dispute_game_factory)},
          game_count = get_game_count(dispute_game_factory, json_rpc_named_arguments),
@@ -83,8 +90,8 @@ defmodule Indexer.Fetcher.Optimism.DisputeGame do
         Logger.error("L1 RPC URL is not defined.")
         {:stop, :normal, %{}}
 
-      {:optimism_portal_valid, false} ->
-        Logger.error("OptimismPortal contract address is invalid or undefined.")
+      {:system_config_valid, false} ->
+        Logger.error("SystemConfig contract address is invalid or undefined.")
         {:stop, :normal, %{}}
 
       {:dispute_game_factory_available, false} ->
@@ -96,6 +103,10 @@ defmodule Indexer.Fetcher.Optimism.DisputeGame do
 
       {:game_count_available, false} ->
         Logger.error("Cannot read gameCount() public getter from the DisputeGameFactory contract.")
+        {:stop, :normal, %{}}
+
+      nil ->
+        Logger.error("Cannot read SystemConfig contract.")
         {:stop, :normal, %{}}
     end
   end
@@ -204,7 +215,7 @@ defmodule Indexer.Fetcher.Optimism.DisputeGame do
     query =
       from(
         game in DisputeGame,
-        select: %{index: game.index, address: game.address},
+        select: %{index: game.index, address_hash: game.address_hash},
         where: is_nil(game.resolved_at),
         order_by: [desc: game.index],
         limit: 1000
@@ -334,7 +345,7 @@ defmodule Indexer.Fetcher.Optimism.DisputeGame do
             ]
           })
 
-        calldata = "0x" <> Base.encode16(encoded_call, case: :lower)
+        calldata = %Data{bytes: encoded_call}
 
         Contract.eth_call_request(calldata, dispute_game_factory, index, nil, nil)
       end)
@@ -356,7 +367,7 @@ defmodule Indexer.Fetcher.Optimism.DisputeGame do
         [extra_data] = Helper.decode_data(extra_data_by_index[game.index], [:bytes])
 
         game
-        |> Map.put(:extra_data, "0x" <> Base.encode16(extra_data, case: :lower))
+        |> Map.put(:extra_data, %Data{bytes: extra_data})
         |> Map.put(:resolved_at, sanitize_resolved_at(resolved_at_by_index[game.index]))
         |> Map.put(:status, quantity_to_integer(status_by_index[game.index]))
       end)
@@ -375,12 +386,14 @@ defmodule Indexer.Fetcher.Optimism.DisputeGame do
   defp decode_games(responses) do
     responses
     |> Enum.map(fn response ->
-      [game_type, created_at, address] = Helper.decode_data(response.result, [{:uint, 32}, {:uint, 64}, :address])
+      [game_type, created_at, address_hash] = Helper.decode_data(response.result, [{:uint, 32}, {:uint, 64}, :address])
+
+      {:ok, address} = Address.cast(address_hash)
 
       %{
         index: response.id,
         game_type: game_type,
-        address: address,
+        address_hash: address,
         created_at: Timex.from_unix(created_at)
       }
     end)
@@ -389,16 +402,7 @@ defmodule Indexer.Fetcher.Optimism.DisputeGame do
   defp read_extra_data(method_id, method_name, games, json_rpc_named_arguments, retries \\ 10) do
     requests =
       games
-      |> Enum.map(fn game ->
-        address =
-          if is_binary(game.address) do
-            "0x" <> Base.encode16(game.address, case: :lower)
-          else
-            game.address
-          end
-
-        Contract.eth_call_request(method_id, address, game.index, nil, nil)
-      end)
+      |> Enum.map(&Contract.eth_call_request(method_id, &1.address_hash, &1.index, nil, nil))
 
     error_message = &"Cannot call #{method_name} public getter of FaultDisputeGame. Error: #{inspect(&1)}"
 

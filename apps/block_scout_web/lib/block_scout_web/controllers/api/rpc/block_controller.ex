@@ -3,9 +3,13 @@ defmodule BlockScoutWeb.API.RPC.BlockController do
 
   alias BlockScoutWeb.Chain, as: ChainWeb
   alias Explorer.Chain
+  alias Explorer.Chain.Block.Reader.General, as: BlockGeneralReader
   alias Explorer.Chain.Cache.BlockNumber
-  alias Explorer.Counters.AverageBlockTime
+  alias Explorer.Chain.Cache.Counters.AverageBlockTime
   alias Timex.Duration
+
+  @invalid_block_number "Invalid block number"
+  @do_not_exist "Block does not exist"
 
   @doc """
   Calculates the total reward for mining a specific block.
@@ -40,13 +44,13 @@ defmodule BlockScoutWeb.API.RPC.BlockController do
       render(conn, :block_reward, block: block)
     else
       {:block_param, :error} ->
-        render(conn, :error, error: "Query parameter 'blockno' is required")
+        render(conn, :error, error: query_param_is_required("blockno"))
 
       {:error, :invalid} ->
-        render(conn, :error, error: "Invalid block number")
+        render(conn, :error, error: @invalid_block_number)
 
       {:error, :not_found} ->
-        render(conn, :error, error: "Block does not exist")
+        render(conn, :error, error: @do_not_exist)
     end
   end
 
@@ -73,7 +77,7 @@ defmodule BlockScoutWeb.API.RPC.BlockController do
   @spec getblockcountdown(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def getblockcountdown(conn, params) do
     with {:block_param, {:ok, unsafe_target_block_number}} <- {:block_param, Map.fetch(params, "blockno")},
-         {:ok, target_block_number} <- ChainWeb.param_to_block_number(unsafe_target_block_number),
+         {:ok, target_block_number} <- ChainWeb.param_to_block_number(unsafe_target_block_number, false),
          {:max_block, current_block_number} when not is_nil(current_block_number) <-
            {:max_block, BlockNumber.get_max()},
          {:average_block_time, average_block_time} when is_struct(average_block_time) <-
@@ -90,10 +94,10 @@ defmodule BlockScoutWeb.API.RPC.BlockController do
       )
     else
       {:block_param, :error} ->
-        render(conn, :error, error: "Query parameter 'blockno' is required")
+        render(conn, :error, error: query_param_is_required("blockno"))
 
       {:error, :invalid} ->
-        render(conn, :error, error: "Invalid block number")
+        render(conn, :error, error: @invalid_block_number)
 
       {:average_block_time, {:error, :disabled}} ->
         render(conn, :error, error: "Average block time calculating is disabled, so getblockcountdown is not available")
@@ -135,23 +139,23 @@ defmodule BlockScoutWeb.API.RPC.BlockController do
          {:closest_param, {:ok, unsafe_closest}} <- {:closest_param, Map.fetch(params, "closest")},
          {:ok, timestamp} <- ChainWeb.param_to_block_timestamp(unsafe_timestamp),
          {:ok, closest} <- ChainWeb.param_to_block_closest(unsafe_closest),
-         {:ok, block_number} <- Chain.timestamp_to_block_number(timestamp, closest, from_api) do
+         {:ok, block_number} <- BlockGeneralReader.timestamp_to_block_number(timestamp, closest, from_api) do
       render(conn, block_number: block_number)
     else
       {:timestamp_param, :error} ->
-        render(conn, :error, error: "Query parameter 'timestamp' is required")
+        render(conn, :error, error: query_param_is_required("timestamp"))
 
       {:closest_param, :error} ->
-        render(conn, :error, error: "Query parameter 'closest' is required")
+        render(conn, :error, error: query_param_is_required("closest"))
 
       {:error, :invalid_timestamp} ->
-        render(conn, :error, error: "Invalid `timestamp` param")
+        render(conn, :error, error: invalid_param("timestamp"))
 
       {:error, :invalid_closest} ->
-        render(conn, :error, error: "Invalid `closest` param")
+        render(conn, :error, error: invalid_param("closest"))
 
       {:error, :not_found} ->
-        render(conn, :error, error: "Block does not exist")
+        render(conn, :error, error: @do_not_exist)
     end
   end
 
@@ -175,5 +179,13 @@ defmodule BlockScoutWeb.API.RPC.BlockController do
     max_block_number = BlockNumber.get_max()
 
     render(conn, :eth_block_number, number: max_block_number, id: id)
+  end
+
+  defp query_param_is_required(param) do
+    "Query parameter '#{param}' is required"
+  end
+
+  defp invalid_param(param) do
+    "Invalid `#{param}` param"
   end
 end

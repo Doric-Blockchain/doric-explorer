@@ -43,7 +43,7 @@
               :token_search,
               :name,
               class: "w-100 dropdown-search-field",
-              'data-filter-dropdown-tokens': true,
+              "data-filter-dropdown-tokens": true,
               placeholder: gettext("Search tokens")
             ) %>
       </div>
@@ -71,6 +71,15 @@
               conn: @conn,
               token_balances: filter_by_type(@token_balances, "ERC-20"),
               type: "ERC-20"
+            ) %>
+      <% end %>
+
+      <%= if Enum.any?(@token_balances, fn token_balance -> token_balance.token.type == "ERC-7984" end) do %>
+        <%= render(
+              "_tokens.html",
+              conn: @conn,
+              token_balances: filter_by_type(@token_balances, "ERC-7984"),
+              type: "ERC-7984"
             ) %>
       <% end %>
     </div>

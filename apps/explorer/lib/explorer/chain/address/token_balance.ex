@@ -12,9 +12,8 @@ defmodule Explorer.Chain.Address.TokenBalance do
   import Explorer.Chain.SmartContract, only: [burn_address_hash_string: 0]
 
   alias Explorer.{Chain, Repo}
-  alias Explorer.Chain.Address.TokenBalance
-  alias Explorer.Chain.Cache.BackgroundMigrations
   alias Explorer.Chain.{Address, Block, Hash, Token}
+  alias Explorer.Chain.Cache.BackgroundMigrations
 
   @typedoc """
    *  `address` - The `t:Explorer.Chain.Address.t/0` that is the balance's owner.
@@ -25,6 +24,8 @@ defmodule Explorer.Chain.Address.TokenBalance do
    *  `value` - The value that's represents the balance.
    *  `token_id` - The token_id of the transferred token (applicable for ERC-1155, ERC-721 and ERC-404 tokens)
    *  `token_type` - The type of the token
+   *  `refetch_after` - when to refetch the token balance
+   *  `retries_count` - number of times the token balance has been retried
   """
   typed_schema "address_token_balances" do
     field(:value, :decimal)
@@ -32,6 +33,8 @@ defmodule Explorer.Chain.Address.TokenBalance do
     field(:value_fetched_at, :utc_datetime_usec)
     field(:token_id, :decimal)
     field(:token_type, :string, null: false)
+    field(:refetch_after, :utc_datetime_usec)
+    field(:retries_count, :integer)
 
     belongs_to(:address, Address, foreign_key: :address_hash, references: :hash, type: Hash.Address, null: false)
 
@@ -47,12 +50,12 @@ defmodule Explorer.Chain.Address.TokenBalance do
     timestamps()
   end
 
-  @optional_fields ~w(value value_fetched_at token_id)a
+  @optional_fields ~w(value value_fetched_at token_id refetch_after retries_count)a
   @required_fields ~w(address_hash block_number token_contract_address_hash token_type)a
   @allowed_fields @optional_fields ++ @required_fields
 
   @doc false
-  def changeset(%TokenBalance{} = token_balance, attrs) do
+  def changeset(%__MODULE__{} = token_balance, attrs) do
     token_balance
     |> cast(attrs, @allowed_fields)
     |> validate_required(@required_fields)
@@ -73,21 +76,24 @@ defmodule Explorer.Chain.Address.TokenBalance do
   def unfetched_token_balances do
     if BackgroundMigrations.get_tb_token_type_finished() do
       from(
-        tb in TokenBalance,
+        tb in __MODULE__,
         where:
           ((tb.address_hash != ^@burn_address_hash and tb.token_type == "ERC-721") or tb.token_type == "ERC-20" or
+             tb.token_type == "ZRC-2" or
              tb.token_type == "ERC-1155" or tb.token_type == "ERC-404") and
-            (is_nil(tb.value_fetched_at) or is_nil(tb.value))
+            (is_nil(tb.value_fetched_at) or is_nil(tb.value)) and
+            (is_nil(tb.refetch_after) or tb.refetch_after < ^Timex.now())
       )
     else
       from(
-        tb in TokenBalance,
+        tb in __MODULE__,
         join: t in Token,
         on: tb.token_contract_address_hash == t.contract_address_hash,
         where:
-          ((tb.address_hash != ^@burn_address_hash and t.type == "ERC-721") or t.type == "ERC-20" or
+          ((tb.address_hash != ^@burn_address_hash and t.type == "ERC-721") or t.type == "ERC-20" or t.type == "ZRC-2" or
              t.type == "ERC-1155" or t.type == "ERC-404") and
-            (is_nil(tb.value_fetched_at) or is_nil(tb.value))
+            (is_nil(tb.value_fetched_at) or is_nil(tb.value)) and
+            (is_nil(tb.refetch_after) or tb.refetch_after < ^Timex.now())
       )
     end
   end
@@ -99,7 +105,7 @@ defmodule Explorer.Chain.Address.TokenBalance do
 
   def fetch_token_balance(address_hash, token_contract_address_hash, block_number, nil) do
     from(
-      tb in TokenBalance,
+      tb in __MODULE__,
       where: tb.address_hash == ^address_hash,
       where: tb.token_contract_address_hash == ^token_contract_address_hash,
       where: tb.block_number <= ^block_number,
@@ -110,7 +116,7 @@ defmodule Explorer.Chain.Address.TokenBalance do
 
   def fetch_token_balance(address_hash, token_contract_address_hash, block_number, token_id) do
     from(
-      tb in TokenBalance,
+      tb in __MODULE__,
       where: tb.address_hash == ^address_hash,
       where: tb.token_contract_address_hash == ^token_contract_address_hash,
       where: tb.token_id == ^token_id,
@@ -141,5 +147,28 @@ defmodule Explorer.Chain.Address.TokenBalance do
     |> where([tb], tb.block_number <= ^block_number)
     |> where([tb], is_nil(tb.value_fetched_at) or is_nil(tb.value))
     |> Repo.delete_all()
+  end
+
+  @doc """
+  Returns a stream of all token balances that weren't fetched values.
+  """
+  @spec stream_unfetched_token_balances(
+          initial :: accumulator,
+          reducer :: (entry :: __MODULE__.t(), accumulator -> accumulator),
+          limited? :: boolean()
+        ) :: {:ok, accumulator}
+        when accumulator: term()
+  def stream_unfetched_token_balances(initial, reducer, limited? \\ false) when is_function(reducer, 2) do
+    __MODULE__.unfetched_token_balances()
+    |> add_token_balances_fetcher_limit(limited?)
+    |> Repo.stream_reduce(initial, reducer)
+  end
+
+  def add_token_balances_fetcher_limit(query, false), do: query
+
+  def add_token_balances_fetcher_limit(query, true) do
+    token_balances_fetcher_limit = Application.get_env(:indexer, :token_balances_fetcher_init_limit)
+
+    limit(query, ^token_balances_fetcher_limit)
   end
 end

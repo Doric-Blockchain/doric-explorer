@@ -2,10 +2,11 @@ defmodule BlockScoutWeb.API.V2.Helper do
   @moduledoc """
     API V2 helper
   """
+  use Utils.CompileTimeEnvHelper, chain_type: [:explorer, :chain_type]
 
   alias Ecto.Association.NotLoaded
-  alias Explorer.Chain
-  alias Explorer.Chain.{Address, Hash}
+  alias Explorer.Chain.{Address, Address.Reputation}
+  alias Explorer.Chain.SmartContract.Proxy
   alias Explorer.Chain.Transaction.History.TransactionStats
 
   import BlockScoutWeb.Account.AuthController, only: [current_user: 1]
@@ -64,36 +65,31 @@ defmodule BlockScoutWeb.API.V2.Helper do
   def address_with_info(%Address{} = address, _address_hash) do
     smart_contract? = Address.smart_contract?(address)
 
-    {proxy_implementations, implementation_address_hashes, implementation_names, implementation_address,
-     implementation_name} =
+    proxy_implementations =
       case address.proxy_implementations do
         %NotLoaded{} ->
-          {nil, [], [], nil, nil}
+          nil
 
         nil ->
-          {nil, [], [], nil, nil}
+          nil
 
         proxy_implementations ->
-          address_hashes = proxy_implementations.address_hashes
-          names = proxy_implementations.names
-
-          address_hash = Enum.at(address_hashes, 0) && address_hashes |> Enum.at(0) |> Address.checksum()
-
-          {proxy_implementations, address_hashes, names, address_hash, Enum.at(names, 0)}
+          proxy_implementations
       end
 
     %{
       "hash" => Address.checksum(address),
       "is_contract" => smart_contract?,
       "name" => address_name(address),
-      # todo: added for backward compatibility, remove when frontend unbound from these props
-      "implementation_address" => implementation_address,
-      "implementation_name" => implementation_name,
-      "implementations" => proxy_object_info(implementation_address_hashes, implementation_names),
-      "is_verified" => verified?(address) || verified_minimal_proxy?(proxy_implementations),
+      "is_scam" => address_marked_as_scam?(address),
+      "reputation" => (address_marked_as_scam?(address) && "scam") || address_reputation_if_loaded(address),
+      "proxy_type" => proxy_implementations && proxy_implementations.proxy_type,
+      "implementations" => Proxy.proxy_object_info(proxy_implementations),
+      "is_verified" => smart_contract_verified?(address) || verified_as_proxy?(proxy_implementations),
       "ens_domain_name" => address.ens_domain_name,
       "metadata" => address.metadata
     }
+    |> address_chain_type_fields(address)
   end
 
   def address_with_info(%NotLoaded{}, address_hash) do
@@ -116,9 +112,9 @@ defmodule BlockScoutWeb.API.V2.Helper do
       "hash" => Address.checksum(address_hash),
       "is_contract" => false,
       "name" => nil,
-      # todo: added for backward compatibility, remove when frontend unbound from these props
-      "implementation_address" => nil,
-      "implementation_name" => nil,
+      "is_scam" => false,
+      "reputation" => "ok",
+      "proxy_type" => nil,
       "implementations" => [],
       "is_verified" => nil,
       "ens_domain_name" => nil,
@@ -126,56 +122,40 @@ defmodule BlockScoutWeb.API.V2.Helper do
     }
   end
 
-  @doc """
-  Retrieves formatted proxy object based on its implementation addresses and names.
+  defp address_reputation_if_loaded(%Address{reputation: %Reputation{reputation: reputation}}) do
+    reputation
+  end
 
-  ## Parameters
+  defp address_reputation_if_loaded(_) do
+    "ok"
+  end
 
-    * `implementation_addresses` - A list of implementation addresses for the proxy object.
-    * `implementation_names` - A list of implementation names for the proxy object.
-
-  ## Returns
-
-  A list of maps containing information about the proxy object.
-
-  """
-  @spec proxy_object_info([String.t() | Hash.Address.t()], [String.t() | nil]) :: [map()]
-  def proxy_object_info([], []), do: []
-
-  def proxy_object_info(implementation_addresses, implementation_names) do
-    implementation_addresses
-    |> Enum.zip(implementation_names)
-    |> Enum.reduce([], fn {address, name}, acc ->
-      case address do
-        %Hash{} = address_hash ->
-          [%{"address" => Address.checksum(address_hash), "name" => name} | acc]
-
-        _ ->
-          with {:ok, address_hash} <- Chain.string_to_address_hash(address),
-               checksummed_address <- Address.checksum(address_hash) do
-            [%{"address" => checksummed_address, "name" => name} | acc]
-          else
-            _ -> acc
-          end
+  case @chain_type do
+    :filecoin ->
+      defp address_chain_type_fields(result, address) do
+        # credo:disable-for-next-line Credo.Check.Design.AliasUsage
+        BlockScoutWeb.API.V2.FilecoinView.extend_address_json_response(result, address)
       end
-    end)
+
+    _ ->
+      defp address_chain_type_fields(result, _address) do
+        result
+      end
   end
 
-  defp minimal_proxy_pattern?(proxy_implementations) do
-    proxy_implementations.proxy_type == :eip1167
+  # We treat contracts with minimal proxy or similar standards as verified if all their implementations are verified
+  defp verified_as_proxy?(%{proxy_type: proxy_type, names: names})
+       when proxy_type in [:eip1167, :eip7702, :clone_with_immutable_arguments, :erc7760] do
+    !Enum.empty?(names) && Enum.all?(names)
   end
 
-  defp verified_minimal_proxy?(nil), do: false
-
-  defp verified_minimal_proxy?(proxy_implementations) do
-    (minimal_proxy_pattern?(proxy_implementations) &&
-       Enum.any?(proxy_implementations.names, fn name -> !is_nil(name) end)) || false
-  end
+  defp verified_as_proxy?(_), do: false
 
   def address_name(%Address{names: [_ | _] = address_names}) do
     case Enum.find(address_names, &(&1.primary == true)) do
       nil ->
-        %Address.Name{name: name} = Enum.at(address_names, 0)
+        # take last created address name, if there is no `primary` one.
+        %Address.Name{name: name} = Enum.max_by(address_names, & &1.inserted_at)
         name
 
       %Address.Name{name: name} ->
@@ -185,18 +165,53 @@ defmodule BlockScoutWeb.API.V2.Helper do
 
   def address_name(_), do: nil
 
-  def verified?(%Address{smart_contract: nil}), do: false
-  def verified?(%Address{smart_contract: %{metadata_from_verified_bytecode_twin: true}}), do: false
-  def verified?(%Address{smart_contract: %NotLoaded{}}), do: nil
-  def verified?(%Address{smart_contract: _}), do: true
-
-  def market_cap(:standard, %{available_supply: available_supply, usd_value: usd_value, market_cap_usd: market_cap_usd})
-      when is_nil(available_supply) or is_nil(usd_value) do
-    max(Decimal.new(0), market_cap_usd)
+  def address_marked_as_scam?(%Address{scam_badge: %Ecto.Association.NotLoaded{}}) do
+    false
   end
 
-  def market_cap(:standard, %{available_supply: available_supply, usd_value: usd_value}) do
-    Decimal.mult(available_supply, usd_value)
+  def address_marked_as_scam?(%Address{scam_badge: scam_badge}) when not is_nil(scam_badge) do
+    true
+  end
+
+  def address_marked_as_scam?(_), do: false
+
+  @doc """
+  Determines if a smart contract is verified.
+
+  ## Parameters
+    - address: An `%Address{}` struct containing smart contract information.
+
+  ## Returns
+    - `false` if the smart contract has metadata from a verified bytecode twin.
+    - `false` if the smart contract is `nil`.
+    - `false` if the smart contract is `NotLoaded`.
+    - `true` if the smart contract is present and does not have metadata from a verified bytecode twin.
+  """
+  @spec smart_contract_verified?(Address.t()) :: boolean() | nil
+  def smart_contract_verified?(%Address{verified: verified}) when is_boolean(verified), do: verified
+  def smart_contract_verified?(%Address{verified: nil}), do: nil
+  def smart_contract_verified?(_), do: false
+
+  def market_cap(:standard, %{
+        available_supply: available_supply,
+        fiat_value: fiat_value,
+        market_cap: %Decimal{} = market_cap
+      })
+      when is_nil(available_supply) or is_nil(fiat_value) do
+    Decimal.max(Decimal.new(0), market_cap)
+  end
+
+  def market_cap(:standard, %{
+        available_supply: available_supply,
+        fiat_value: fiat_value,
+        market_cap: nil
+      })
+      when is_nil(available_supply) or is_nil(fiat_value) do
+    Decimal.new(0)
+  end
+
+  def market_cap(:standard, %{available_supply: available_supply, fiat_value: fiat_value}) do
+    Decimal.mult(available_supply, fiat_value)
   end
 
   def market_cap(module, exchange_rate) do
@@ -205,7 +220,7 @@ defmodule BlockScoutWeb.API.V2.Helper do
 
   def get_transaction_stats do
     stats_scale = date_range(1)
-    transaction_stats = TransactionStats.by_date_range(stats_scale.earliest, stats_scale.latest)
+    transaction_stats = TransactionStats.by_date_range(stats_scale.earliest, stats_scale.latest, api?: true)
 
     # Need datapoint for legend if none currently available.
     if Enum.empty?(transaction_stats) do
