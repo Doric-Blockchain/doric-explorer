@@ -3,12 +3,14 @@ defmodule EthereumJSONRPC.Receipt do
   Receipts format as returned by
   [`eth_getTransactionReceipt`](https://github.com/ethereum/wiki/wiki/JSON-RPC/e8e0771b9f3677693649d945956bc60e886ceb2b#eth_gettransactionreceipt).
   """
+  use Utils.CompileTimeEnvHelper, chain_type: [:explorer, :chain_type]
+  use Utils.RuntimeEnvHelper, op_isthmus_timestamp: [:indexer, [Indexer.Fetcher.Optimism, :isthmus_timestamp_l2]]
 
   import EthereumJSONRPC, only: [quantity_to_integer: 1]
 
   alias EthereumJSONRPC.Logs
 
-  case Application.compile_env(:explorer, :chain_type) do
+  case @chain_type do
     :ethereum ->
       @chain_type_fields quote(
                            do: [
@@ -23,7 +25,17 @@ defmodule EthereumJSONRPC.Receipt do
                              l1_fee: non_neg_integer(),
                              l1_fee_scalar: non_neg_integer(),
                              l1_gas_price: non_neg_integer(),
-                             l1_gas_used: non_neg_integer()
+                             l1_gas_used: non_neg_integer(),
+                             operator_fee_scalar: non_neg_integer() | nil,
+                             operator_fee_constant: non_neg_integer() | nil,
+                             da_footprint_gas_scalar: non_neg_integer() | nil
+                           ]
+                         )
+
+    :scroll ->
+      @chain_type_fields quote(
+                           do: [
+                             l1_fee: non_neg_integer()
                            ]
                          )
 
@@ -110,7 +122,7 @@ defmodule EthereumJSONRPC.Receipt do
         status: :ok,
         transaction_hash: "0x3a3eb134e6792ce9403ea4188e5e79693de9e4c94e499db132be086400da79e6",
         transaction_index: 0,\
-  #{case Application.compile_env(:explorer, :chain_type) do
+  #{case @chain_type do
     :ethereum -> """
             blob_gas_price: 0,\
             blob_gas_used: 0\
@@ -119,7 +131,13 @@ defmodule EthereumJSONRPC.Receipt do
           l1_fee: 0,\
           l1_fee_scalar: 0,\
           l1_gas_price: 0,\
-          l1_gas_used: 0\
+          l1_gas_used: 0,\
+          operator_fee_scalar: nil,\
+          operator_fee_constant: nil,\
+          da_footprint_gas_scalar: nil\
+      """
+    :scroll -> """
+          l1_fee: 0\
       """
     :arbitrum -> """
           gas_used_for_l1: nil\
@@ -159,7 +177,7 @@ defmodule EthereumJSONRPC.Receipt do
         status: nil,
         transaction_hash: "0x5c504ed432cb51138bcf09aa5e8a410dd4a1e204ef84bfed1be16dfba1b22060",
         transaction_index: 0,\
-  #{case Application.compile_env(:explorer, :chain_type) do
+  #{case @chain_type do
     :ethereum -> """
             blob_gas_price: 0,\
             blob_gas_used: 0\
@@ -168,7 +186,13 @@ defmodule EthereumJSONRPC.Receipt do
           l1_fee: 0,\
           l1_fee_scalar: 0,\
           l1_gas_price: 0,\
-          l1_gas_used: 0\
+          l1_gas_used: 0,\
+          operator_fee_scalar: nil,\
+          operator_fee_constant: nil,\
+          da_footprint_gas_scalar: nil\
+      """
+    :scroll -> """
+          l1_fee: 0\
       """
     :arbitrum -> """
           gas_used_for_l1: nil\
@@ -217,7 +241,7 @@ defmodule EthereumJSONRPC.Receipt do
 
   defp maybe_append_gas_price(params, _), do: params
 
-  case Application.compile_env(:explorer, :chain_type) do
+  case @chain_type do
     :ethereum ->
       defp chain_type_fields(params, elixir) do
         params
@@ -229,12 +253,30 @@ defmodule EthereumJSONRPC.Receipt do
 
     :optimism ->
       defp chain_type_fields(params, elixir) do
+        {operator_fee_scalar_default, operator_fee_constant_default} =
+          if is_nil(op_isthmus_timestamp()) do
+            {nil, nil}
+          else
+            {0, 0}
+          end
+
         params
         |> Map.merge(%{
           l1_fee: Map.get(elixir, "l1Fee", 0),
           l1_fee_scalar: Map.get(elixir, "l1FeeScalar", 0),
           l1_gas_price: Map.get(elixir, "l1GasPrice", 0),
-          l1_gas_used: Map.get(elixir, "l1GasUsed", 0)
+          l1_gas_used: Map.get(elixir, "l1GasUsed", 0),
+          operator_fee_scalar: Map.get(elixir, "operatorFeeScalar", operator_fee_scalar_default),
+          operator_fee_constant: Map.get(elixir, "operatorFeeConstant", operator_fee_constant_default),
+          da_footprint_gas_scalar: Map.get(elixir, "daFootprintGasScalar")
+        })
+      end
+
+    :scroll ->
+      defp chain_type_fields(params, elixir) do
+        params
+        |> Map.merge(%{
+          l1_fee: Map.get(elixir, "l1Fee", 0)
         })
       end
 
@@ -370,7 +412,8 @@ defmodule EthereumJSONRPC.Receipt do
   defp entry_to_elixir({key, quantity})
        when key in ~w(blockNumber cumulativeGasUsed gasUsed transactionIndex blobGasUsed
                       blobGasPrice l1Fee l1GasPrice l1GasUsed effectiveGasPrice gasUsedForL1
-                      l1BlobBaseFeeScalar l1BlobBaseFee l1BaseFeeScalar) do
+                      l1BlobBaseFeeScalar l1BlobBaseFee l1BaseFeeScalar operatorFeeScalar
+                      operatorFeeConstant daFootprintGasScalar) do
     result =
       if is_nil(quantity) do
         nil
@@ -402,43 +445,7 @@ defmodule EthereumJSONRPC.Receipt do
     end
   end
 
-  # fixes for latest ganache JSON RPC
-  defp entry_to_elixir({key, _}) when key in ~w(r s v) do
+  defp entry_to_elixir({_, _}) do
     :ignore
-  end
-
-  # Nethermind field
-  defp entry_to_elixir({"error", _}) do
-    :ignore
-  end
-
-  # Arbitrum fields
-  defp entry_to_elixir({key, _}) when key in ~w(returnData returnCode feeStats l1BlockNumber) do
-    :ignore
-  end
-
-  # Metis fields
-  defp entry_to_elixir({key, _}) when key in ~w(l1GasUsed l1GasPrice l1FeeScalar l1Fee) do
-    :ignore
-  end
-
-  # GoQuorum specific transaction receipt fields
-  defp entry_to_elixir({key, _}) when key in ~w(isPrivacyMarkerTransaction) do
-    :ignore
-  end
-
-  # Optimism specific transaction receipt fields
-  defp entry_to_elixir({key, _}) when key in ~w(depositNonce depositReceiptVersion) do
-    :ignore
-  end
-
-  # zkSync specific transaction receipt fields
-  defp entry_to_elixir({key, _})
-       when key in ~w(l1BatchNumber l1BatchTxIndex l2ToL1Logs) do
-    :ignore
-  end
-
-  defp entry_to_elixir({key, value}) do
-    {:error, {:unknown_key, %{key: key, value: value}}}
   end
 end

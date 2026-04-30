@@ -1,7 +1,9 @@
 defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
   use BlockScoutWeb.ConnCase
+  use Utils.RuntimeEnvHelper, chain_type: [:explorer, :chain_type]
 
   alias Explorer.Account.{
+    Identity,
     TagAddress,
     TagTransaction,
     WatchlistAddress
@@ -9,17 +11,25 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
 
   alias Explorer.Chain.Address
   alias Explorer.Repo
-  alias BlockScoutWeb.Models.UserFromAuth
 
   setup %{conn: conn} do
     auth = build(:auth)
 
-    {:ok, user} = UserFromAuth.find_or_create(auth)
+    {:ok, user} = Identity.find_or_create(auth)
 
     {:ok, user: user, conn: Plug.Test.init_test_session(conn, current_user: user)}
   end
 
   describe "Test account/api/account/v2/user" do
+    setup do
+      initial_value = :persistent_term.get(:market_token_fetcher_enabled, false)
+      :persistent_term.put(:market_token_fetcher_enabled, true)
+
+      on_exit(fn ->
+        :persistent_term.put(:market_token_fetcher_enabled, initial_value)
+      end)
+    end
+
     test "get user info", %{conn: conn, user: user} do
       result_conn =
         conn
@@ -30,7 +40,8 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
                "nickname" => user.nickname,
                "name" => user.name,
                "email" => user.email,
-               "avatar" => user.avatar
+               "avatar" => user.avatar,
+               "address_hash" => user.address_hash
              }
     end
 
@@ -151,9 +162,7 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
              "name" => name,
              "address" => %{
                "hash" => Address.checksum(addr),
-               # todo: added for backward compatibility, remove when frontend unbound from these props
-               "implementation_address" => nil,
-               "implementation_name" => nil,
+               "proxy_type" => nil,
                "implementations" => [],
                "is_contract" => false,
                "is_verified" => false,
@@ -184,7 +193,9 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
         |> Map.get("items")
 
       assert Enum.all?(created, fn {_, _, map} ->
-               map in response
+               Enum.any?(response, fn item ->
+                 addresses_json_match?(map, item)
+               end)
              end)
     end
 
@@ -210,9 +221,7 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
              "name" => name,
              "address" => %{
                "hash" => Address.checksum(addr),
-               # todo: added for backward compatibility, remove when frontend unbound from these props
-               "implementation_address" => nil,
-               "implementation_name" => nil,
+               "proxy_type" => nil,
                "implementations" => [],
                "is_contract" => false,
                "is_verified" => false,
@@ -241,7 +250,11 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
         |> json_response(200)
         |> Map.get("items")
 
-      assert Enum.all?(created, fn {_, _, map} -> map in response end)
+      assert Enum.all?(created, fn {_, _, map} ->
+               Enum.any?(response, fn item ->
+                 addresses_json_match?(map, item)
+               end)
+             end)
 
       {_, _, %{"id" => id}} = Enum.at(created, 0)
 
@@ -272,32 +285,32 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
     end
 
     test "post private transaction tag", %{conn: conn} do
-      tx_hash_non_existing = to_string(build(:transaction).hash)
-      tx_hash = to_string(insert(:transaction).hash)
+      transaction_hash_non_existing = to_string(build(:transaction).hash)
+      transaction_hash = to_string(insert(:transaction).hash)
 
       assert conn
              |> post("/api/account/v2/user/tags/transaction", %{
-               "transaction_hash" => tx_hash_non_existing,
+               "transaction_hash" => transaction_hash_non_existing,
                "name" => "MyName"
              })
-             |> doc(description: "Error on try to create private transaction tag for tx does not exist")
-             |> json_response(422) == %{"errors" => %{"tx_hash" => ["Transaction does not exist"]}}
+             |> doc(description: "Error on try to create private transaction tag for transaction does not exist")
+             |> json_response(422) == %{"errors" => %{"transaction_hash" => ["Transaction does not exist"]}}
 
       tag_transaction_response =
         conn
         |> post("/api/account/v2/user/tags/transaction", %{
-          "transaction_hash" => tx_hash,
+          "transaction_hash" => transaction_hash,
           "name" => "MyName"
         })
         |> doc(description: "Create private transaction tag")
         |> json_response(200)
 
       conn
-      |> get("/api/account/v2/tags/transaction/#{tx_hash}")
+      |> get("/api/account/v2/tags/transaction/#{transaction_hash}")
       |> doc(description: "Get tags for transaction")
       |> json_response(200)
 
-      assert tag_transaction_response["transaction_hash"] == tx_hash
+      assert tag_transaction_response["transaction_hash"] == transaction_hash
       assert tag_transaction_response["name"] == "MyName"
       assert tag_transaction_response["id"]
     end
@@ -347,11 +360,11 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
     end
 
     test "edit private transaction tag", %{conn: conn} do
-      tx_tag = build(:tag_transaction)
+      transaction_tag = build(:tag_transaction)
 
       tag_response =
         conn
-        |> post("/api/account/v2/user/tags/transaction", tx_tag)
+        |> post("/api/account/v2/user/tags/transaction", transaction_tag)
         |> json_response(200)
 
       _response =
@@ -359,20 +372,20 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
         |> get("/api/account/v2/user/tags/transaction")
         |> json_response(200) == [tag_response]
 
-      assert tag_response["address_hash"] == tx_tag["address_hash"]
-      assert tag_response["name"] == tx_tag["name"]
+      assert tag_response["address_hash"] == transaction_tag["address_hash"]
+      assert tag_response["name"] == transaction_tag["name"]
       assert tag_response["id"]
 
-      new_tx_tag = build(:tag_transaction)
+      new_transaction_tag = build(:tag_transaction)
 
       new_tag_response =
         conn
-        |> put("/api/account/v2/user/tags/transaction/#{tag_response["id"]}", new_tx_tag)
+        |> put("/api/account/v2/user/tags/transaction/#{tag_response["id"]}", new_transaction_tag)
         |> doc(description: "Edit private transaction tag")
         |> json_response(200)
 
-      assert new_tag_response["address_hash"] == new_tx_tag["address_hash"]
-      assert new_tag_response["name"] == new_tx_tag["name"]
+      assert new_tag_response["address_hash"] == new_transaction_tag["address_hash"]
+      assert new_tag_response["name"] == new_transaction_tag["name"]
       assert new_tag_response["id"] == tag_response["id"]
     end
 
@@ -382,25 +395,25 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
       zipped = Enum.zip(transactions, names)
 
       created =
-        Enum.map(zipped, fn {tx_hash, name} ->
+        Enum.map(zipped, fn {transaction_hash, name} ->
           id =
             (conn
              |> post("/api/account/v2/user/tags/transaction", %{
-               "transaction_hash" => tx_hash,
+               "transaction_hash" => transaction_hash,
                "name" => name
              })
              |> json_response(200))["id"]
 
-          {tx_hash, %{"label" => name}, %{"transaction_hash" => tx_hash, "id" => id, "name" => name}}
+          {transaction_hash, %{"label" => name}, %{"transaction_hash" => transaction_hash, "id" => id, "name" => name}}
         end)
 
-      assert Enum.all?(created, fn {tx_hash, map_tag, _} ->
+      assert Enum.all?(created, fn {transaction_hash, map_tag, _} ->
                response =
                  conn
-                 |> get("/api/account/v2/tags/transaction/#{tx_hash}")
+                 |> get("/api/account/v2/tags/transaction/#{transaction_hash}")
                  |> json_response(200)
 
-               response["personal_tx_tag"] == map_tag
+               response["personal_transaction_tag"] == map_tag
              end)
 
       response =
@@ -419,25 +432,25 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
       zipped = Enum.zip(transactions, names)
 
       created =
-        Enum.map(zipped, fn {tx_hash, name} ->
+        Enum.map(zipped, fn {transaction_hash, name} ->
           id =
             (conn
              |> post("/api/account/v2/user/tags/transaction", %{
-               "transaction_hash" => tx_hash,
+               "transaction_hash" => transaction_hash,
                "name" => name
              })
              |> json_response(200))["id"]
 
-          {tx_hash, %{"label" => name}, %{"transaction_hash" => tx_hash, "id" => id, "name" => name}}
+          {transaction_hash, %{"label" => name}, %{"transaction_hash" => transaction_hash, "id" => id, "name" => name}}
         end)
 
-      assert Enum.all?(created, fn {tx_hash, map_tag, _} ->
+      assert Enum.all?(created, fn {transaction_hash, map_tag, _} ->
                response =
                  conn
-                 |> get("/api/account/v2/tags/transaction/#{tx_hash}")
+                 |> get("/api/account/v2/tags/transaction/#{transaction_hash}")
                  |> json_response(200)
 
-               response["personal_tx_tag"] == map_tag
+               response["personal_transaction_tag"] == map_tag
              end)
 
       response =
@@ -473,7 +486,7 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
                  |> json_response(200)
                  |> Map.get("items")
 
-               response["personal_tx_tag"] == nil
+               response["personal_transaction_tag"] == nil
              end)
     end
 
@@ -561,6 +574,32 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
              |> json_response(422)
 
       Application.put_env(:explorer, Explorer.Account, old_env)
+    end
+
+    test "can't insert contract watchlist address", %{conn: conn} do
+      address = insert(:contract_address)
+
+      response =
+        conn
+        |> post(
+          "/api/account/v2/user/watchlist",
+          build(:watchlist_address) |> Map.put("address_hash", to_string(address.hash))
+        )
+        |> json_response(422)
+
+      assert response == %{"errors" => %{"address_hash" => ["This address isn't EOA"]}}
+    end
+
+    test "can insert EOA with code watchlist address", %{conn: conn, user: _user} do
+      address = insert(:contract_address, contract_code: "0xef01000000000000000000000000000000000000000123")
+
+      _response =
+        conn
+        |> post(
+          "/api/account/v2/user/watchlist",
+          build(:watchlist_address) |> Map.put("address_hash", to_string(address.hash))
+        )
+        |> json_response(200)
     end
 
     test "check watchlist tags pagination", %{conn: conn, user: user} do
@@ -765,10 +804,10 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
             )
             |> Repo.preload([:token])
 
-          Decimal.div(
-            Decimal.mult(ctb.value, ctb.token.fiat_value),
-            Decimal.new(10 ** Decimal.to_integer(ctb.token.decimals))
-          )
+          ctb.value
+          |> Decimal.mult(ctb.token.fiat_value)
+          |> Decimal.div(Decimal.new(10 ** Decimal.to_integer(ctb.token.decimals)))
+          |> Decimal.round(16)
         end
 
       values_1 =
@@ -779,24 +818,24 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
             )
             |> Repo.preload([:token])
 
-          Decimal.div(
-            Decimal.mult(ctb.value, ctb.token.fiat_value),
-            Decimal.new(10 ** Decimal.to_integer(ctb.token.decimals))
-          )
+          ctb.value
+          |> Decimal.mult(ctb.token.fiat_value)
+          |> Decimal.div(Decimal.new(10 ** Decimal.to_integer(ctb.token.decimals)))
+          |> Decimal.round(16)
         end
         |> Enum.sort(fn x1, x2 -> Decimal.compare(x1, x2) in [:gt, :eq] end)
         |> Enum.take(150)
 
       [wa2, wa1] = conn |> get("/api/account/v2/user/watchlist") |> json_response(200) |> Map.get("items")
 
-      assert wa1["tokens_fiat_value"] |> Decimal.new() |> Decimal.round(13) ==
-               values |> Enum.reduce(Decimal.new(0), fn x, acc -> Decimal.add(x, acc) end) |> Decimal.round(13)
+      assert wa1["tokens_fiat_value"] |> Decimal.new() ==
+               values |> Enum.reduce(Decimal.new(0), fn x, acc -> Decimal.add(x, acc) end)
 
       assert wa1["tokens_count"] == 150
       assert wa1["tokens_overflow"] == false
 
-      assert wa2["tokens_fiat_value"] |> Decimal.new() |> Decimal.round(13) ==
-               values_1 |> Enum.reduce(Decimal.new(0), fn x, acc -> Decimal.add(x, acc) end) |> Decimal.round(13)
+      assert wa2["tokens_fiat_value"] |> Decimal.new() ==
+               values_1 |> Enum.reduce(Decimal.new(0), fn x, acc -> Decimal.add(x, acc) end)
 
       assert wa2["tokens_count"] == 150
       assert wa2["tokens_overflow"] == true
@@ -821,10 +860,10 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
             )
             |> Repo.preload([:token])
 
-          Decimal.div(
-            Decimal.mult(ctb.value, ctb.token.fiat_value),
-            Decimal.new(10 ** Decimal.to_integer(ctb.token.decimals))
-          )
+          ctb.value
+          |> Decimal.mult(ctb.token.fiat_value)
+          |> Decimal.div(Decimal.new(10 ** Decimal.to_integer(ctb.token.decimals)))
+          |> Decimal.round(16)
         end
 
       token = insert(:token, fiat_value: nil)
@@ -837,8 +876,8 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
 
       [wa1] = conn |> get("/api/account/v2/user/watchlist") |> json_response(200) |> Map.get("items")
 
-      assert wa1["tokens_fiat_value"] |> Decimal.new() |> Decimal.round(13) ==
-               values |> Enum.reduce(Decimal.new(0), fn x, acc -> Decimal.add(x, acc) end) |> Decimal.round(13)
+      assert wa1["tokens_fiat_value"] |> Decimal.new() ==
+               values |> Enum.reduce(Decimal.new(0), fn x, acc -> Decimal.add(x, acc) end)
 
       assert wa1["tokens_count"] == 150
       assert wa1["tokens_overflow"] == false
@@ -1049,169 +1088,6 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
     end
   end
 
-  describe "public tags" do
-    test "create public tags request", %{conn: conn} do
-      public_tags_request = build(:public_tags_request)
-
-      post_public_tags_request_response =
-        conn
-        |> post(
-          "/api/account/v2/user/public_tags",
-          public_tags_request
-        )
-        |> doc(description: "Submit request to add a public tag")
-        |> json_response(200)
-
-      assert post_public_tags_request_response["full_name"] == public_tags_request["full_name"]
-      assert post_public_tags_request_response["email"] == public_tags_request["email"]
-      assert post_public_tags_request_response["tags"] == public_tags_request["tags"]
-      assert post_public_tags_request_response["website"] == public_tags_request["website"]
-      assert post_public_tags_request_response["additional_comment"] == public_tags_request["additional_comment"]
-      assert post_public_tags_request_response["addresses"] == public_tags_request["addresses"]
-      assert post_public_tags_request_response["company"] == public_tags_request["company"]
-      assert post_public_tags_request_response["is_owner"] == public_tags_request["is_owner"]
-      assert post_public_tags_request_response["id"]
-    end
-
-    test "get one public tags requests", %{conn: conn} do
-      public_tags_request = build(:public_tags_request)
-
-      post_public_tags_request_response =
-        conn
-        |> post(
-          "/api/account/v2/user/public_tags",
-          public_tags_request
-        )
-        |> json_response(200)
-
-      assert post_public_tags_request_response["full_name"] == public_tags_request["full_name"]
-      assert post_public_tags_request_response["email"] == public_tags_request["email"]
-      assert post_public_tags_request_response["tags"] == public_tags_request["tags"]
-      assert post_public_tags_request_response["website"] == public_tags_request["website"]
-      assert post_public_tags_request_response["additional_comment"] == public_tags_request["additional_comment"]
-      assert post_public_tags_request_response["addresses"] == public_tags_request["addresses"]
-      assert post_public_tags_request_response["company"] == public_tags_request["company"]
-      assert post_public_tags_request_response["is_owner"] == public_tags_request["is_owner"]
-      assert post_public_tags_request_response["id"]
-
-      assert conn
-             |> get("/api/account/v2/user/public_tags")
-             |> json_response(200)
-             |> Enum.map(&convert_date/1) ==
-               [post_public_tags_request_response]
-               |> Enum.map(&convert_date/1)
-    end
-
-    test "get and delete several public tags requests", %{conn: conn} do
-      public_tags_list = build_list(10, :public_tags_request)
-
-      final_list =
-        public_tags_list
-        |> Enum.map(fn request ->
-          response =
-            conn
-            |> post(
-              "/api/account/v2/user/public_tags",
-              request
-            )
-            |> json_response(200)
-
-          assert response["full_name"] == request["full_name"]
-          assert response["email"] == request["email"]
-          assert response["tags"] == request["tags"]
-          assert response["website"] == request["website"]
-          assert response["additional_comment"] == request["additional_comment"]
-          assert response["addresses"] == request["addresses"]
-          assert response["company"] == request["company"]
-          assert response["is_owner"] == request["is_owner"]
-          assert response["id"]
-
-          convert_date(response)
-        end)
-        |> Enum.reverse()
-
-      assert conn
-             |> get("/api/account/v2/user/public_tags")
-             |> doc(description: "Get list of requests to add a public tag")
-             |> json_response(200)
-             |> Enum.map(&convert_date/1) == final_list
-
-      %{"id" => id} = Enum.at(final_list, 0)
-
-      assert conn
-             |> delete("/api/account/v2/user/public_tags/#{id}", %{"remove_reason" => "reason"})
-             |> doc(description: "Delete public tags request")
-             |> json_response(200) == %{"message" => "OK"}
-
-      Enum.each(Enum.drop(final_list, 1), fn request ->
-        assert conn
-               |> delete("/api/account/v2/user/public_tags/#{request["id"]}", %{"remove_reason" => "reason"})
-               |> json_response(200) == %{"message" => "OK"}
-      end)
-
-      assert conn
-             |> get("/api/account/v2/user/public_tags")
-             |> json_response(200) == []
-    end
-
-    test "edit public tags request", %{conn: conn} do
-      public_tags_request = build(:public_tags_request)
-
-      post_public_tags_request_response =
-        conn
-        |> post(
-          "/api/account/v2/user/public_tags",
-          public_tags_request
-        )
-        |> json_response(200)
-
-      assert post_public_tags_request_response["full_name"] == public_tags_request["full_name"]
-      assert post_public_tags_request_response["email"] == public_tags_request["email"]
-      assert post_public_tags_request_response["tags"] == public_tags_request["tags"]
-      assert post_public_tags_request_response["website"] == public_tags_request["website"]
-      assert post_public_tags_request_response["additional_comment"] == public_tags_request["additional_comment"]
-      assert post_public_tags_request_response["addresses"] == public_tags_request["addresses"]
-      assert post_public_tags_request_response["company"] == public_tags_request["company"]
-      assert post_public_tags_request_response["is_owner"] == public_tags_request["is_owner"]
-      assert post_public_tags_request_response["id"]
-
-      assert conn
-             |> get("/api/account/v2/user/public_tags")
-             |> json_response(200)
-             |> Enum.map(&convert_date/1) ==
-               [post_public_tags_request_response]
-               |> Enum.map(&convert_date/1)
-
-      new_public_tags_request = build(:public_tags_request)
-
-      put_public_tags_request_response =
-        conn
-        |> put(
-          "/api/account/v2/user/public_tags/#{post_public_tags_request_response["id"]}",
-          new_public_tags_request
-        )
-        |> doc(description: "Edit request to add a public tag")
-        |> json_response(200)
-
-      assert put_public_tags_request_response["full_name"] == new_public_tags_request["full_name"]
-      assert put_public_tags_request_response["email"] == new_public_tags_request["email"]
-      assert put_public_tags_request_response["tags"] == new_public_tags_request["tags"]
-      assert put_public_tags_request_response["website"] == new_public_tags_request["website"]
-      assert put_public_tags_request_response["additional_comment"] == new_public_tags_request["additional_comment"]
-      assert put_public_tags_request_response["addresses"] == new_public_tags_request["addresses"]
-      assert put_public_tags_request_response["company"] == new_public_tags_request["company"]
-      assert put_public_tags_request_response["is_owner"] == new_public_tags_request["is_owner"]
-      assert put_public_tags_request_response["id"] == post_public_tags_request_response["id"]
-
-      assert conn
-             |> get("/api/account/v2/user/public_tags")
-             |> json_response(200)
-             |> Enum.map(&convert_date/1) ==
-               [put_public_tags_request_response]
-               |> Enum.map(&convert_date/1)
-    end
-  end
-
   def convert_date(request) do
     {:ok, time, _} = DateTime.from_iso8601(request["submission_date"])
     %{request | "submission_date" => Calendar.strftime(time, "%b %d, %Y")}
@@ -1225,7 +1101,7 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
   end
 
   defp compare_item(%TagTransaction{} = tag_transaction, json) do
-    assert json["transaction_hash"] == to_string(tag_transaction.tx_hash)
+    assert json["transaction_hash"] == to_string(tag_transaction.transaction_hash)
     assert json["name"] == tag_transaction.name
     assert json["id"] == tag_transaction.id
   end
@@ -1250,12 +1126,22 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
       }
     }
 
+    notification_settings_extended =
+      if chain_type() == :zilliqa do
+        Map.put(notification_settings, "ZRC-2", %{
+          "incoming" => watchlist.watch_zrc_2_input,
+          "outcoming" => watchlist.watch_zrc_2_output
+        })
+      else
+        notification_settings
+      end
+
     assert json["address_hash"] == to_string(watchlist.address_hash)
     assert json["name"] == watchlist.name
     assert json["id"] == watchlist.id
     assert json["address"]["hash"] == Address.checksum(watchlist.address_hash)
     assert json["notification_methods"]["email"] == watchlist.notify_email
-    assert json["notification_settings"] == notification_settings
+    assert json["notification_settings"] == notification_settings_extended
   end
 
   defp check_paginated_response(first_page_resp, second_page_resp, list) do
@@ -1267,5 +1153,15 @@ defmodule BlockScoutWeb.Account.Api.V2.UserControllerTest do
     assert Enum.count(second_page_resp["items"]) == 1
     assert second_page_resp["next_page_params"] == nil
     compare_item(Enum.at(list, 0), Enum.at(second_page_resp["items"], 0))
+  end
+
+  defp addresses_json_match?(expected, actual) do
+    Enum.all?(expected, fn {key, value} ->
+      case value do
+        # Recursively compare nested maps
+        %{} -> addresses_json_match?(value, actual[key])
+        _ -> actual[key] == value
+      end
+    end)
   end
 end

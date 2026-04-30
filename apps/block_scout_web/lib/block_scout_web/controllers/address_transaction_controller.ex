@@ -6,29 +6,20 @@ defmodule BlockScoutWeb.AddressTransactionController do
   use BlockScoutWeb, :controller
 
   import BlockScoutWeb.Account.AuthController, only: [current_user: 1]
-  import BlockScoutWeb.Chain, only: [current_filter: 1, paging_options: 1, next_page_params: 3, split_list_by_page: 1]
+
+  import BlockScoutWeb.Chain,
+    only: [current_filter: 1, paging_options: 1, next_page_params: 3, split_list_by_page: 1]
+
   import BlockScoutWeb.Models.GetAddressTags, only: [get_address_tags: 2]
   import Explorer.Chain.SmartContract, only: [burn_address_hash_string: 0]
 
   alias BlockScoutWeb.{AccessHelper, Controller, TransactionView}
-  alias BlockScoutWeb.API.V2.CSVExportController
   alias Explorer.{Chain, Market}
-  alias Explorer.Chain.Address
-  alias Explorer.Chain.CSVExport.Helper, as: CSVHelper
-
-  alias Explorer.Chain.CSVExport.{
-    AddressInternalTransactionCsvExporter,
-    AddressLogCsvExporter,
-    AddressTokenTransferCsvExporter,
-    AddressTransactionCsvExporter
-  }
 
   alias Explorer.Chain.{DenormalizationHelper, Transaction, Wei}
 
   alias Indexer.Fetcher.OnDemand.CoinBalance, as: CoinBalanceOnDemand
   alias Phoenix.View
-
-  alias Plug.Conn
 
   @transaction_necessity_by_association [
     necessity_by_association: %{
@@ -48,7 +39,7 @@ defmodule BlockScoutWeb.AddressTransactionController do
     address_options = [necessity_by_association: %{:names => :optional, :smart_contract => :optional}]
 
     with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
-         {:ok, address} <- Chain.hash_to_address(address_hash, address_options, false),
+         {:ok, address} <- Chain.hash_to_address(address_hash, address_options),
          {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params) do
       options =
         @transaction_necessity_by_association
@@ -75,26 +66,7 @@ defmodule BlockScoutWeb.AddressTransactionController do
 
       items_json =
         Enum.map(results, fn result ->
-          case result do
-            {%Chain.Block.Reward{} = emission_reward, %Chain.Block.Reward{} = validator_reward} ->
-              View.render_to_string(
-                TransactionView,
-                "_emission_reward_tile.html",
-                current_address: address,
-                emission_funds: emission_reward,
-                validator: validator_reward
-              )
-
-            %Chain.Transaction{} = transaction ->
-              View.render_to_string(
-                TransactionView,
-                "_tile.html",
-                conn: conn,
-                current_address: address,
-                transaction: transaction,
-                burn_address_hash: @burn_address_hash
-              )
-          end
+          render_address_transaction_item(result, conn, address)
         end)
 
       json(conn, %{items: items_json, next_page_path: next_page_url})
@@ -117,6 +89,8 @@ defmodule BlockScoutWeb.AddressTransactionController do
   end
 
   def index(conn, %{"address_id" => address_hash_string} = params) do
+    ip = AccessHelper.conn_to_ip_string(conn)
+
     with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
          {:ok, address} <- Chain.hash_to_address(address_hash),
          {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params) do
@@ -124,7 +98,7 @@ defmodule BlockScoutWeb.AddressTransactionController do
         conn,
         "index.html",
         address: address,
-        coin_balance_status: CoinBalanceOnDemand.trigger_fetch(address),
+        coin_balance_status: CoinBalanceOnDemand.trigger_fetch(ip, address),
         exchange_rate: Market.get_coin_exchange_rate(),
         filter: params["filter"],
         counters_path: address_path(conn, :address_counters, %{"id" => address_hash_string}),
@@ -154,7 +128,7 @@ defmodule BlockScoutWeb.AddressTransactionController do
               conn,
               "index.html",
               address: address,
-              coin_balance_status: nil,
+              coin_balance_status: CoinBalanceOnDemand.trigger_fetch(ip, address),
               exchange_rate: Market.get_coin_exchange_rate(),
               filter: params["filter"],
               counters_path: address_path(conn, :address_counters, %{"id" => address_hash_string}),
@@ -168,100 +142,28 @@ defmodule BlockScoutWeb.AddressTransactionController do
     end
   end
 
-  defp items_csv(
-         conn,
-         %{
-           "address_id" => address_hash_string,
-           "from_period" => from_period,
-           "to_period" => to_period,
-           "recaptcha_response" => recaptcha_response
-         } = params,
-         csv_export_module
-       )
-       when is_binary(address_hash_string) do
-    with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
-         {:address_exists, true} <- {:address_exists, Address.address_exists?(address_hash)},
-         {:recaptcha, true} <- {:recaptcha, CSVHelper.captcha_helper().recaptcha_passed?(recaptcha_response)} do
-      filter_type = Map.get(params, "filter_type")
-      filter_value = Map.get(params, "filter_value")
-
-      address_hash
-      |> csv_export_module.export(from_period, to_period, filter_type, filter_value)
-      |> Enum.reduce_while(CSVExportController.put_resp_params(conn), fn chunk, conn ->
-        case Conn.chunk(conn, chunk) do
-          {:ok, conn} ->
-            {:cont, conn}
-
-          {:error, :closed} ->
-            {:halt, conn}
-        end
-      end)
-    else
-      :error ->
-        unprocessable_entity(conn)
-
-      {:address_exists, false} ->
-        not_found(conn)
-
-      {:recaptcha, false} ->
-        not_found(conn)
-    end
+  defp render_address_transaction_item(
+         {%Chain.Block.Reward{} = emission_reward, %Chain.Block.Reward{} = validator_reward},
+         _conn,
+         address
+       ) do
+    View.render_to_string(
+      TransactionView,
+      "_emission_reward_tile.html",
+      current_address: address,
+      emission_funds: emission_reward,
+      validator: validator_reward
+    )
   end
 
-  defp items_csv(
-         conn,
-         %{
-           "address_id" => address_hash_string,
-           "from_period" => from_period,
-           "to_period" => to_period
-         } = params,
-         csv_export_module
-       )
-       when is_binary(address_hash_string) do
-    with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
-         {:address_exists, true} <- {:address_exists, Address.address_exists?(address_hash)},
-         true <- Application.get_env(:block_scout_web, :recaptcha)[:is_disabled] do
-      filter_type = Map.get(params, "filter_type")
-      filter_value = Map.get(params, "filter_value")
-
-      address_hash
-      |> csv_export_module.export(from_period, to_period, filter_type, filter_value)
-      |> Enum.reduce_while(CSVExportController.put_resp_params(conn), fn chunk, conn ->
-        case Conn.chunk(conn, chunk) do
-          {:ok, conn} ->
-            {:cont, conn}
-
-          {:error, :closed} ->
-            {:halt, conn}
-        end
-      end)
-    else
-      :error ->
-        unprocessable_entity(conn)
-
-      {:address_exists, false} ->
-        not_found(conn)
-
-      false ->
-        not_found(conn)
-    end
-  end
-
-  defp items_csv(conn, _, _), do: not_found(conn)
-
-  def token_transfers_csv(conn, params) do
-    items_csv(conn, params, AddressTokenTransferCsvExporter)
-  end
-
-  def transactions_csv(conn, params) do
-    items_csv(conn, params, AddressTransactionCsvExporter)
-  end
-
-  def internal_transactions_csv(conn, params) do
-    items_csv(conn, params, AddressInternalTransactionCsvExporter)
-  end
-
-  def logs_csv(conn, params) do
-    items_csv(conn, params, AddressLogCsvExporter)
+  defp render_address_transaction_item(%Chain.Transaction{} = transaction, conn, address) do
+    View.render_to_string(
+      TransactionView,
+      "_tile.html",
+      conn: conn,
+      current_address: address,
+      transaction: transaction,
+      burn_address_hash: @burn_address_hash
+    )
   end
 end

@@ -3,13 +3,17 @@ defmodule Explorer.Account.Notifier.ForbiddenAddress do
     Check if address is forbidden to notify
   """
 
-  import Explorer.Chain.SmartContract, only: [burn_address_hash_string: 0]
+  import Explorer.Chain.SmartContract,
+    only: [
+      burn_address_hash_string: 0,
+      dead_address_hash_string: 0
+    ]
 
   alias Explorer.Chain.Address
 
   @blacklist [
     burn_address_hash_string(),
-    "0x000000000000000000000000000000000000dEaD"
+    dead_address_hash_string()
   ]
 
   alias Explorer.AccessHelper
@@ -45,7 +49,7 @@ defmodule Explorer.Account.Notifier.ForbiddenAddress do
   defp contract?(%Explorer.Chain.Hash{} = address_hash) do
     case hash_to_address(address_hash) do
       {:error, :not_found} -> false
-      {:ok, address} -> Address.smart_contract?(address)
+      {:ok, address} -> Address.smart_contract?(address) && !Address.eoa_with_code?(address)
     end
   end
 

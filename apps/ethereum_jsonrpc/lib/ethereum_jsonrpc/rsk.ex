@@ -3,8 +3,8 @@ defmodule EthereumJSONRPC.RSK do
   Ethereum JSONRPC methods that are/are not supported by [RSK](https://www.rsk.co/).
   """
 
+  alias EthereumJSONRPC.{Geth, TraceBlock}
   alias EthereumJSONRPC.RSK.Traces
-  alias EthereumJSONRPC.TraceBlock
 
   @behaviour EthereumJSONRPC.Variant
 
@@ -18,4 +18,8 @@ defmodule EthereumJSONRPC.RSK do
 
   def fetch_beneficiaries(_, _), do: :ignore
   def fetch_first_trace(_transactions_params, _json_rpc_named_arguments), do: :ignore
+
+  def fetch_transaction_raw_traces(transaction_params, json_rpc_named_arguments) do
+    Geth.fetch_transaction_raw_traces(transaction_params, json_rpc_named_arguments)
+  end
 end

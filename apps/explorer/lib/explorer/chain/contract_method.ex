@@ -8,8 +8,8 @@ defmodule Explorer.Chain.ContractMethod do
   import Ecto.Query, only: [from: 2]
   use Explorer.Schema
 
-  alias Explorer.Chain.{Hash, MethodIdentifier, SmartContract}
   alias Explorer.{Chain, Repo}
+  alias Explorer.Chain.{Data, Hash, MethodIdentifier, SmartContract}
 
   typed_schema "contract_methods" do
     field(:identifier, MethodIdentifier)
@@ -35,7 +35,7 @@ defmodule Explorer.Chain.ContractMethod do
         end
       end)
 
-    unless Enum.empty?(errors) do
+    if !Enum.empty?(errors) do
       Logger.error(fn ->
         ["Error parsing some abi elements at ", Hash.to_iodata(address_hash), ": ", Enum.intersperse(errors, "\n")]
       end)
@@ -44,7 +44,10 @@ defmodule Explorer.Chain.ContractMethod do
     # Enforce ContractMethod ShareLocks order (see docs: sharelocks.md)
     ordered_successes = Enum.sort_by(successes, &{&1.identifier, &1.abi})
 
-    Repo.insert_all(__MODULE__, ordered_successes, on_conflict: :nothing, conflict_target: [:identifier, :abi])
+    Repo.insert_all(__MODULE__, ordered_successes,
+      on_conflict: :nothing,
+      conflict_target: {:unsafe_fragment, ~s<(identifier, md5(abi::text))>}
+    )
   end
 
   def import_all do
@@ -67,11 +70,12 @@ defmodule Explorer.Chain.ContractMethod do
   @doc """
   Query that finds limited number of contract methods by selector id
   """
-  @spec find_contract_method_query(binary(), integer()) :: Ecto.Query.t()
+  @spec find_contract_method_query(binary() | Data.t(), integer()) :: Ecto.Query.t()
   def find_contract_method_query(method_id, limit) do
     from(
       contract_method in __MODULE__,
       where: contract_method.identifier == ^method_id,
+      order_by: [asc: contract_method.inserted_at],
       limit: ^limit
     )
   end
@@ -108,14 +112,19 @@ defmodule Explorer.Chain.ContractMethod do
   @doc """
   Finds contract methods by selector id
   """
-  @spec find_contract_methods(binary(), [Chain.api?()]) :: [__MODULE__.t()]
+  @spec find_contract_methods([binary()], [Chain.api?()]) :: [__MODULE__.t()]
+  def find_contract_methods(method_ids, options)
+
+  def find_contract_methods([], _), do: []
+
   def find_contract_methods(method_ids, options) do
     query =
       from(
         contract_method in __MODULE__,
         distinct: contract_method.identifier,
         where: contract_method.abi["type"] == "function",
-        where: contract_method.identifier in ^method_ids
+        where: contract_method.identifier in ^method_ids,
+        order_by: [asc: contract_method.identifier, asc: contract_method.inserted_at]
       )
 
     Chain.select_repo(options).all(query)
@@ -131,8 +140,10 @@ defmodule Explorer.Chain.ContractMethod do
         # we always take only the first 4 bytes of the hash.
         <<first_four_bytes::binary-size(4), _::binary>> = selector.method_id
 
+        {:ok, method_id} = MethodIdentifier.cast(first_four_bytes)
+
         %{
-          identifier: first_four_bytes,
+          identifier: method_id,
           abi: element,
           type: Atom.to_string(selector.type),
           inserted_at: now,

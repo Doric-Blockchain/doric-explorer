@@ -7,6 +7,8 @@ defmodule Explorer.Repo.ConfigHelper do
   The priority of vars is postgrex environment vars < DATABASE_URL components, with values being overwritten by higher priority.
   """
 
+  alias Utils.ConfigHelper, as: UtilsConfigHelper
+
   # https://hexdocs.pm/postgrex/Postgrex.html#start_link/1-options
   @postgrex_env_vars [
     username: "PGUSER",
@@ -26,13 +28,23 @@ defmodule Explorer.Repo.ConfigHelper do
     |> Keyword.merge(extract_parameters(url))
   end
 
-  def get_account_db_url, do: System.get_env("ACCOUNT_DATABASE_URL") || System.get_env("DATABASE_URL")
+  def get_account_db_url,
+    do:
+      UtilsConfigHelper.parse_url_env_var("ACCOUNT_DATABASE_URL") || UtilsConfigHelper.parse_url_env_var("DATABASE_URL")
 
-  def get_suave_db_url, do: System.get_env("SUAVE_DATABASE_URL") || System.get_env("DATABASE_URL")
+  def get_suave_db_url,
+    do: UtilsConfigHelper.parse_url_env_var("SUAVE_DATABASE_URL") || UtilsConfigHelper.parse_url_env_var("DATABASE_URL")
 
-  def get_api_db_url, do: System.get_env("DATABASE_READ_ONLY_API_URL") || System.get_env("DATABASE_URL")
+  def get_api_db_url,
+    do:
+      UtilsConfigHelper.parse_url_env_var("DATABASE_READ_ONLY_API_URL") ||
+        UtilsConfigHelper.parse_url_env_var("DATABASE_URL")
 
-  def get_mud_db_url, do: System.get_env("MUD_DATABASE_URL") || System.get_env("DATABASE_URL")
+  def get_mud_db_url,
+    do: UtilsConfigHelper.parse_url_env_var("MUD_DATABASE_URL") || UtilsConfigHelper.parse_url_env_var("DATABASE_URL")
+
+  def get_event_notification_db_url,
+    do: UtilsConfigHelper.parse_url_env_var("DATABASE_EVENT_URL") || UtilsConfigHelper.parse_url_env_var("DATABASE_URL")
 
   def init_repo_module(module, opts) do
     db_url = Application.get_env(:explorer, module)[:url]
@@ -49,7 +61,7 @@ defmodule Explorer.Repo.ConfigHelper do
 
     Application.put_env(:explorer, module, merged)
 
-    {:ok, Keyword.put(opts, :url, db_url)}
+    {:ok, opts |> Keyword.put(:url, remove_search_path(db_url)) |> Keyword.merge(Keyword.take(merged, [:search_path]))}
   end
 
   def ssl_enabled?, do: String.equivalent?(System.get_env("ECTO_USE_SSL") || "true", "true")
@@ -58,10 +70,44 @@ defmodule Explorer.Repo.ConfigHelper do
 
   # sobelow_skip ["DOS.StringToAtom"]
   def extract_parameters(database_url) do
-    ~r/\w*:\/\/(?<username>[a-zA-Z0-9_-]*):(?<password>[a-zA-Z0-9-*#!%^&$_.]*)?@(?<hostname>(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])):(?<port>\d+)\/(?<database>[a-zA-Z0-9_-]*)/
+    ~r/\w*:\/\/(?<username>[a-zA-Z0-9_-]*):(?<password>[a-zA-Z0-9-*#!%^&$_.]*)?@(?<hostname>(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])):(?<port>\d+)\/(?<database>[a-zA-Z0-9_\-]*)(\?.*search_path=(?<search_path>[a-zA-Z0-9_\-,]+))?/
     |> Regex.named_captures(database_url)
     |> Keyword.new(fn {k, v} -> {String.to_atom(k), v} end)
     |> Keyword.put(:url, database_url)
+    |> adjust_search_path()
+  end
+
+  defp adjust_search_path(params) do
+    case params[:search_path] do
+      empty when empty in [nil, ""] -> Keyword.delete(params, :search_path)
+      [_search_path] -> params
+      search_path -> Keyword.put(params, :search_path, [search_path])
+    end
+  end
+
+  # Workaround for Ecto.Repo init.
+  # It takes parameters from the url in priority over provided options (as strings)
+  # while Postgrex expects search_path to be a list
+  # which means that it will always crash if there is a search_path parameter in DB url.
+  # That's why we need to remove this parameter from DB url before passing it to Ecto.
+  defp remove_search_path(nil), do: nil
+
+  defp remove_search_path(db_url) do
+    case URI.parse(db_url) do
+      %{query: nil} ->
+        db_url
+
+      %{query: query} = uri ->
+        query_without_search_path =
+          query
+          |> URI.decode_query()
+          |> Map.delete("search_path")
+          |> URI.encode_query()
+
+        uri
+        |> Map.put(:query, query_without_search_path)
+        |> URI.to_string()
+    end
   end
 
   defp get_env_vars(vars, env_function) do

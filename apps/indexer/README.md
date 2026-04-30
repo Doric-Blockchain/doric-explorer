@@ -1,6 +1,6 @@
 # Indexer
 
-**TODO: Add description**
+The Indexer component of Blockscout is a backend process built in Elixir using supervised `GenServers`. It fetches blockchain data from Ethereum-based networks using an ETL pipeline that supports both real-time and catch-up indexing. The component buffers and batches incoming data to effectively manage concurrency and memory usage. It transforms raw data such as blocks, transactions, receipts, and logs into structured formats, orchestrating both synchronous and asynchronous processing. The Indexer does not directly interact with the PostgreSQL database via `Ecto`; instead, it passes prepared data to the Explorer component using the Chain.import function. Its design includes specialized fetchers and transformers that support multi-chain environments, handling data from networks like Optimism, Arbitrum, Polygon Edge, zkSync, and others. The component integrates robust error handling and retry mechanisms to ensure data integrity during processing. Multi-chain support is further emphasized through dedicated modules that process chain-specific data and transform it into database-ready structures.
 
 ## Structure
 
@@ -21,7 +21,6 @@ Some data has to be extracted from already fetched data, and there're several tr
 - `address_coin_balances`: detects coin balance-changing entities (transactions, minted blocks, etc) to create coin balance entities for further fetching
 - `token_transfers`: parses logs to extract token transfers
 - `mint_transfers`: parses logs to extract token mint transfers
-- `transaction_actions`: parses logs to extract transaction actions
 - `address_token_balances`: creates token balance entities for further fetching, based on detected token transfers
 - `blocks`: extracts block signer hash from additional data for Clique chains
 - `optimism_withdrawals`: parses logs to extract L2 withdrawal messages
@@ -45,7 +44,6 @@ Both block fetchers retrieve/extract the blocks themselves and the following add
 - `transactions`
 - `logs`
 - `token_transfers`
-- `transaction_actions`
 - `addresses`
 - `withdrawals`
 
@@ -104,9 +102,9 @@ Additionally:
 These workers are created for fetching information, which previously wasn't fetched in existing fetchers, or was fetched incorrectly.
 After all deployed instances get all needed data, these fetchers should be deprecated and removed.
 
-- `uncataloged_token_transfers`: extracts token transfers from logs, which previously weren't parsed due to unknown format
+- `uncataloged_token_transfers`: extracts token transfers from logs, which weren't parsed due to an unknown format
 - `uncles_without_index`: adds previously unfetched `index` field for unfetched blocks in `block_second_degree_relations`
-- `blocks_transactions_mismatch`: refetches each block once and revokes consensus to those whose transaction number mismatches with the number currently stored. This is meant to force the correction of a race condition that caused successfully fetched transactions to be overwritten by a following non-consensus block: [#1911](https://github.com/blockscout/blockscout/issues/1911).
+- `blocks_transactions_mismatch`: refetches each block once and revokes consensus for those whose transaction number mismatches with the number currently stored. This is meant to force the correction of a race condition that caused successfully fetched transactions to be overwritten by a following non-consensus block: [#1911](https://github.com/blockscout/blockscout/issues/1911).
 
 ## Memory Usage
 

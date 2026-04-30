@@ -18,12 +18,19 @@ defmodule EthereumJSONRPC.TraceReplayBlockTransactions do
       {:ok, responses} ->
         case trace_replay_transaction_responses_to_first_trace_params(responses, id_to_params, traces_module) do
           {:ok, [first_trace]} ->
-            %{block_hash: block_hash} =
+            %{block_hash: block_hash, block_number: block_number} =
               transactions_params
               |> Enum.at(0)
 
             {:ok,
-             [%{first_trace: first_trace, block_hash: block_hash, json_rpc_named_arguments: json_rpc_named_arguments}]}
+             [
+               %{
+                 first_trace: first_trace,
+                 block_hash: block_hash,
+                 block_number: block_number,
+                 json_rpc_named_arguments: json_rpc_named_arguments
+               }
+             ]}
 
           {:error, error} ->
             Logger.error(inspect(error))
@@ -48,6 +55,24 @@ defmodule EthereumJSONRPC.TraceReplayBlockTransactions do
            |> trace_replay_block_transactions_requests()
            |> json_rpc(json_rpc_named_arguments) do
       trace_replay_block_transactions_responses_to_internal_transactions_params(responses, id_to_params, traces_module)
+    end
+  end
+
+  @doc """
+  Fetches the raw traces of transaction by `trace_replayTransaction` JSON RPC method.
+  """
+  @spec fetch_transaction_raw_traces(map(), EthereumJSONRPC.json_rpc_named_arguments()) ::
+          {:ok, [map()]} | {:error, any()}
+  def fetch_transaction_raw_traces(%{hash: transaction_hash}, json_rpc_named_arguments) do
+    request = trace_replay_transaction_request(%{id: 0, hash_data: to_string(transaction_hash)})
+
+    case json_rpc(request, json_rpc_named_arguments) do
+      {:ok, response} ->
+        {:ok, Map.get(response, "trace", [])}
+
+      {:error, error} ->
+        Logger.error(inspect(error))
+        {:error, error}
     end
   end
 
@@ -236,6 +261,26 @@ defmodule EthereumJSONRPC.TraceReplayBlockTransactions do
         "transactionIndex" => transaction_index,
         "transactionHash" => transaction_hash
       })
+
+    {:error, annotated_error}
+  end
+
+  defp trace_replay_transaction_response_to_first_trace(%{id: id, result: error_result}, id_to_params)
+       when is_map(id_to_params) do
+    %{
+      block_hash: block_hash,
+      block_number: block_number,
+      hash_data: transaction_hash,
+      transaction_index: transaction_index
+    } = Map.fetch!(id_to_params, id)
+
+    annotated_error = %{
+      "blockHash" => block_hash,
+      "blockNumber" => block_number,
+      "transactionIndex" => transaction_index,
+      "transactionHash" => transaction_hash,
+      "result" => error_result
+    }
 
     {:error, annotated_error}
   end

@@ -5,8 +5,8 @@ defmodule Explorer.SmartContract.RustVerifierInterfaceBehaviour do
   defmacro __using__(_) do
     # credo:disable-for-next-line
     quote([]) do
+      alias Explorer.HttpClient
       alias Explorer.Utility.Microservice
-      alias HTTPoison.Response
       require Logger
 
       @post_timeout :timer.minutes(5)
@@ -24,7 +24,7 @@ defmodule Explorer.SmartContract.RustVerifierInterfaceBehaviour do
             } = body,
             metadata
           ) do
-        http_post_request(solidity_multiple_files_verification_url(), append_metadata(body, metadata), true)
+        http_post_request(solidity_multiple_files_verification_url(), append_metadata(body, metadata))
       end
 
       def verify_standard_json_input(
@@ -36,7 +36,19 @@ defmodule Explorer.SmartContract.RustVerifierInterfaceBehaviour do
             } = body,
             metadata
           ) do
-        http_post_request(solidity_standard_json_verification_url(), append_metadata(body, metadata), true)
+        http_post_request(solidity_standard_json_verification_url(), append_metadata(body, metadata))
+      end
+
+      def zksync_verify_standard_json_input(
+            %{
+              "code" => _,
+              "solcCompiler" => _,
+              "zkCompiler" => _,
+              "input" => _
+            } = body,
+            metadata
+          ) do
+        http_post_request(solidity_standard_json_verification_url(), append_metadata(body, metadata))
       end
 
       def vyper_verify_multipart(
@@ -48,7 +60,7 @@ defmodule Explorer.SmartContract.RustVerifierInterfaceBehaviour do
             } = body,
             metadata
           ) do
-        http_post_request(vyper_multiple_files_verification_url(), append_metadata(body, metadata), true)
+        http_post_request(vyper_multiple_files_verification_url(), append_metadata(body, metadata))
       end
 
       def vyper_verify_standard_json(
@@ -60,16 +72,14 @@ defmodule Explorer.SmartContract.RustVerifierInterfaceBehaviour do
             } = body,
             metadata
           ) do
-        http_post_request(vyper_standard_json_verification_url(), append_metadata(body, metadata), true)
+        http_post_request(vyper_standard_json_verification_url(), append_metadata(body, metadata))
       end
 
-      def http_post_request(url, body, is_verification_request?, options \\ []) do
+      def http_post_request(url, body, options \\ []) do
         headers = [{"Content-Type", "application/json"}]
 
-        case HTTPoison.post(url, Jason.encode!(body), maybe_put_api_key_header(headers, is_verification_request?),
-               recv_timeout: @post_timeout
-             ) do
-          {:ok, %Response{body: body, status_code: _}} ->
+        case HttpClient.post(url, Jason.encode!(body), put_api_key_header(headers), recv_timeout: @post_timeout) do
+          {:ok, %{body: body, status_code: _}} ->
             process_verifier_response(body, options)
 
           {:error, error} ->
@@ -88,9 +98,7 @@ defmodule Explorer.SmartContract.RustVerifierInterfaceBehaviour do
         end
       end
 
-      defp maybe_put_api_key_header(headers, false), do: headers
-
-      defp maybe_put_api_key_header(headers, true) do
+      defp put_api_key_header(headers) do
         api_key = Application.get_env(:explorer, Explorer.SmartContract.RustVerifierInterfaceBehaviour)[:api_key]
 
         if api_key do
@@ -101,11 +109,11 @@ defmodule Explorer.SmartContract.RustVerifierInterfaceBehaviour do
       end
 
       def http_get_request(url) do
-        case HTTPoison.get(url) do
-          {:ok, %Response{body: body, status_code: 200}} ->
+        case HttpClient.get(url) do
+          {:ok, %{body: body, status_code: 200}} ->
             process_verifier_response(body, [])
 
-          {:ok, %Response{body: body, status_code: _}} ->
+          {:ok, %{body: body, status_code: _}} ->
             {:error, body}
 
           {:error, error} ->
@@ -146,32 +154,64 @@ defmodule Explorer.SmartContract.RustVerifierInterfaceBehaviour do
         {:ok, source}
       end
 
+      # zksync
+      def process_verifier_response(%{"verificationSuccess" => success}, _) do
+        {:ok, success}
+      end
+
+      # zksync
+      def process_verifier_response(%{"verificationFailure" => %{"message" => error}}, _) do
+        {:error, error}
+      end
+
+      # zksync
+      def process_verifier_response(%{"compilationFailure" => %{"message" => error}}, _) do
+        {:error, error}
+      end
+
       def process_verifier_response(%{"status" => "FAILURE", "message" => error}, _) do
         {:error, error}
       end
 
       def process_verifier_response(%{"compilerVersions" => versions}, _), do: {:ok, versions}
 
-      def process_verifier_response(other, _), do: {:error, other}
+      # zksync
+      def process_verifier_response(%{"solcCompilers" => solc_compilers, "zkCompilers" => zk_compilers}, _),
+        do: {:ok, {solc_compilers, zk_compilers}}
+
+      def process_verifier_response(other, res) do
+        {:error, other}
+      end
 
       # Uses url encoded ("%3A") version of ':', as ':' symbol breaks `Bypass` library during tests.
       # https://github.com/PSPDFKit-labs/bypass/issues/122
 
       def solidity_multiple_files_verification_url,
-        do: "#{base_api_url()}" <> "/verifier/solidity/sources%3Averify-multi-part"
+        do: base_api_url() <> "/verifier/solidity/sources%3Averify-multi-part"
 
       def vyper_multiple_files_verification_url,
-        do: "#{base_api_url()}" <> "/verifier/vyper/sources%3Averify-multi-part"
+        do: base_api_url() <> "/verifier/vyper/sources%3Averify-multi-part"
 
       def vyper_standard_json_verification_url,
-        do: "#{base_api_url()}" <> "/verifier/vyper/sources%3Averify-standard-json"
+        do: base_api_url() <> "/verifier/vyper/sources%3Averify-standard-json"
 
-      def solidity_standard_json_verification_url,
-        do: "#{base_api_url()}" <> "/verifier/solidity/sources%3Averify-standard-json"
+      def solidity_standard_json_verification_url do
+        base_api_url() <> verifier_path() <> "/solidity/sources%3Averify-standard-json"
+      end
 
-      def versions_list_url, do: "#{base_api_url()}" <> "/verifier/solidity/versions"
+      def versions_list_url do
+        base_api_url() <> verifier_path() <> "/solidity/versions"
+      end
 
-      def vyper_versions_list_url, do: "#{base_api_url()}" <> "/verifier/vyper/versions"
+      defp verifier_path do
+        if Application.get_env(:explorer, :chain_type) == :zksync do
+          "/zksync-verifier"
+        else
+          "/verifier"
+        end
+      end
+
+      def vyper_versions_list_url, do: base_api_url() <> "/verifier/vyper/versions"
 
       def base_api_url, do: "#{base_url()}" <> "/api/v2"
 

@@ -1,11 +1,8 @@
 name: 'Setup repo'
 description: 'Setup repo: checkout/login/extract metadata, Set up Docker Buildx'
 inputs:
-  docker-username:
-    description: 'Docker username'
-    required: true
-  docker-password:
-    description: 'Docker password'
+  github-token:
+    description: 'GitHub token for ghcr.io authentication'
     required: true
   docker-remote-multi-platform:
     description: 'Docker remote multi-platform builder'
@@ -20,7 +17,7 @@ inputs:
   docker-image:
     description: 'Docker image'
     required: true
-    default: blockscout/blockscout
+    default: ghcr.io/blockscout/blockscout
 outputs:
   docker-builder:
     description: 'Docker builder'
@@ -46,7 +43,7 @@ runs:
     - name: Find builder
       if: ${{ inputs.docker-remote-multi-platform }}
       shell: bash
-      run: echo "BUILDER_IP=$(./.github/scripts/select-builder.sh ${{ inputs.docker-arm-host }} ubuntu ~/.ssh/id_rsa)" >> $GITHUB_ENV
+      run: echo "BUILDER_IP=$(./.github/scripts/select-builder.sh ${{ inputs.docker-arm-host }} root ~/.ssh/id_rsa)" >> $GITHUB_ENV
     - name: Set up SSH
       if: ${{ inputs.docker-remote-multi-platform }}
       uses: MrSquaare/ssh-setup-action@523473d91581ccbf89565e12b40faba93f2708bd # v1.1.0
@@ -68,14 +65,15 @@ runs:
       with:
         platforms: linux/amd64
         append: |
-          - endpoint: ssh://ubuntu@${{ env.BUILDER_IP }}
+          - endpoint: ssh://root@${{ env.BUILDER_IP }}
             platforms: linux/arm64/v8
 
-    - name: Log in to Docker Hub
+    - name: Log in to GitHub Container Registry
       uses: docker/login-action@v3
       with:
-        username: ${{ inputs.docker-username }}
-        password: ${{ inputs.docker-password }}
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ inputs.github-token }}
 
     - name: Extract metadata (tags, labels) for Docker
       id: meta

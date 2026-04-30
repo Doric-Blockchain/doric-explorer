@@ -61,6 +61,10 @@ dump.rdb
 *.iml
 
 .vscode
+.cursorignore
+.cursorrules
+.elixir_ls
+.claude/settings.local.json
 
 **.dec**
 
@@ -68,3 +72,13 @@ dump.rdb
 *.env.example
 *.env.local
 *.env.staging
+.devcontainer/.blockscout_config*
+
+# dets tables
+queue_storage
+tasks_in_progress
+/dets
+
+/temp
+
+openapi.yaml

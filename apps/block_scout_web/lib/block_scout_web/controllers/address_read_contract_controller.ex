@@ -19,14 +19,17 @@ defmodule BlockScoutWeb.AddressReadContractController do
   alias Indexer.Fetcher.OnDemand.CoinBalance, as: CoinBalanceOnDemand
 
   def index(conn, %{"address_id" => address_hash_string} = params) do
+    ip = AccessHelper.conn_to_ip_string(conn)
+
     address_options = [
       necessity_by_association: %{
-        :contracts_creation_internal_transaction => :optional,
         :names => :optional,
         :smart_contract => :optional,
         :token => :optional,
-        :contracts_creation_transaction => :optional
-      }
+        Address.contract_creation_transaction_association() => :optional
+      },
+      preload_contract_creation_internal_transaction: true,
+      ip: ip
     ]
 
     custom_abi = AddressView.fetch_custom_abi(conn, address_hash_string)
@@ -43,7 +46,7 @@ defmodule BlockScoutWeb.AddressReadContractController do
     ]
 
     with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
-         {:ok, address} <- Chain.find_contract_address(address_hash, address_options, true),
+         {:ok, address} <- Address.find_contract_address(address_hash, address_options),
          false <- is_nil(address.smart_contract),
          need_wallet? <- Reader.read_functions_required_wallet_from_abi(address.smart_contract.abi) != [],
          {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params) do
@@ -55,7 +58,7 @@ defmodule BlockScoutWeb.AddressReadContractController do
             address: address,
             non_custom_abi: true,
             need_wallet: need_wallet? || need_wallet_custom_abi?,
-            coin_balance_status: CoinBalanceOnDemand.trigger_fetch(address),
+            coin_balance_status: CoinBalanceOnDemand.trigger_fetch(ip, address),
             counters_path: address_path(conn, :address_counters, %{"id" => Address.checksum(address_hash)}),
             tags: get_address_tags(address_hash, current_user(conn))
           ]
@@ -64,7 +67,7 @@ defmodule BlockScoutWeb.AddressReadContractController do
       _ ->
         if custom_abi? do
           with {:ok, address_hash} <- Chain.string_to_address_hash(address_hash_string),
-               {:ok, address} <- Chain.find_contract_address(address_hash, address_options, false),
+               {:ok, address} <- Address.find_contract_address(address_hash, address_options),
                {:ok, false} <- AccessHelper.restricted_access?(address_hash_string, params) do
             render(
               conn,
@@ -74,7 +77,7 @@ defmodule BlockScoutWeb.AddressReadContractController do
                   address: address,
                   non_custom_abi: false,
                   need_wallet: need_wallet_custom_abi?,
-                  coin_balance_status: CoinBalanceOnDemand.trigger_fetch(address),
+                  coin_balance_status: CoinBalanceOnDemand.trigger_fetch(ip, address),
                   counters_path: address_path(conn, :address_counters, %{"id" => Address.checksum(address_hash)}),
                   tags: get_address_tags(address_hash, current_user(conn))
                 ]
